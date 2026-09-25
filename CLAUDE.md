@@ -1,5 +1,7 @@
 # CLAUDE.md — moto-server
 
+@.claude/PLATFORM-RULES.md
+
 ## What this repo is
 
 The server side (Python, D-010): receives, stores, and serves ride data coming from the vehicle.
