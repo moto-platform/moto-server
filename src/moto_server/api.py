@@ -7,6 +7,7 @@ not silently run open).
 
 from __future__ import annotations
 
+import hmac
 import json
 import tempfile
 from pathlib import Path
@@ -33,7 +34,8 @@ def require_token(request: Request, settings: SettingsDep) -> None:
     if settings.api_token is None:
         raise HTTPException(status_code=503, detail="MOTO_API_TOKEN is not configured")
     auth = request.headers.get("authorization", "")
-    if auth != f"Bearer {settings.api_token}":
+    # Constant-time comparison so response timing does not leak the token.
+    if not hmac.compare_digest(auth.encode(), f"Bearer {settings.api_token}".encode()):
         raise HTTPException(status_code=401, detail="missing or invalid bearer token")
 
 
