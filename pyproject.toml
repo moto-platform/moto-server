@@ -1,0 +1,38 @@
+[project]
+name = "moto-server"
+version = "0.1.0"
+description = "Ingestion, storage and validation of moto-platform ride sessions (D-010)."
+readme = "README.md"
+authors = [{ name = "moto-platform" }]
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "python-multipart>=0.0.9",
+    "pyarrow>=17.0",
+]
+
+[project.scripts]
+moto-server = "moto_server.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.8.17,<0.9.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "httpx>=0.27",
+    "ruff>=0.6",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["external"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

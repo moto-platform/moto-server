@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      # This repo is checked out with the default GITHUB_TOKEN. The private submodule
+      # external/moto-vehicle-defs needs the org secret MOTO_DEFS_TOKEN (fine-grained,
+      # Contents: read on moto-vehicle-defs only), so it is fetched in a separate step:
+      # passing that token to actions/checkout would also use it for THIS repo, which it
+      # cannot read. Never vendor the defs into this repo to make CI pass. (D-031)
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+          # Don't persist GITHUB_TOKEN: git would send it (via an included credentials config)
+          # instead of the MOTO_DEFS_TOKEN URL credentials and the defs clone gets 403.
+          persist-credentials: false
+
+      - name: Fetch moto-vehicle-defs submodule (MOTO_DEFS_TOKEN)
+        env:
+          MOTO_DEFS_TOKEN: ${{ secrets.MOTO_DEFS_TOKEN }}
+        run: |
+          if [ -z "$MOTO_DEFS_TOKEN" ]; then
+            echo "::error::Secret MOTO_DEFS_TOKEN (fine-grained PAT, Contents: read on moto-vehicle-defs) is not available. On the Free plan add it as a REPOSITORY secret."
+            exit 1
+          fi
+          git config --global \
+            url."https://x-access-token:${MOTO_DEFS_TOKEN}@github.com/moto-platform/moto-vehicle-defs".insteadOf \
+            "https://github.com/moto-platform/moto-vehicle-defs"
+          git submodule sync --recursive
+          git submodule update --init --recursive
+          git -C external/moto-vehicle-defs describe --tags --always
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "0.8.17"
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Lint (ruff check)
+        run: uv run ruff check .
+
+      - name: Format check (ruff format)
+        run: uv run ruff format --check .
+
+      # Schema drift: the packaged copy must equal moto-connectivity-node's
+      # docs/ble_telemetry_packet_schema.json (single source). That repo is private, so a
+      # token with Contents: read on moto-connectivity-node is needed (MOTO_CONN_READ_TOKEN).
+      # Without it the drift test is skipped and a warning is printed (same pattern as
+      # moto-mobile's CI).
+      - name: Fetch BLE schema source (moto-connectivity-node)
+        env:
+          TOKEN: ${{ secrets.MOTO_CONN_READ_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::warning::MOTO_CONN_READ_TOKEN not available: BLE schema drift check skipped."
+            exit 0
+          fi
+          curl -fsSL -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github.raw" \
+            -o "$RUNNER_TEMP/ble_schema.json" \
+            https://api.github.com/repos/moto-platform/moto-connectivity-node/contents/docs/ble_telemetry_packet_schema.json?ref=main
+          echo "MOTO_CONN_SCHEMA=$RUNNER_TEMP/ble_schema.json" >> "$GITHUB_ENV"
+          echo "MOTO_SCHEMA_DRIFT_REQUIRED=1" >> "$GITHUB_ENV"
+
+      - name: Test
+        run: uv run pytest
+
+      - name: Docker Compose config (smoke check)
+        run: docker compose config
+        env:
+          MOTO_API_TOKEN: ci-smoke-check-placeholder

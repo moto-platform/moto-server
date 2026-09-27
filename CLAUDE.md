@@ -29,6 +29,18 @@ The server side (Python, D-010): receives, stores, and serves ride data coming f
 
 `uv` + `ruff` + `pytest` (D-007), FastAPI. Local services run via `docker compose`.
 
+```bash
+git submodule update --init --recursive   # external/moto-vehicle-defs, pinned to v0.1.0
+uv sync
+uv run pytest
+uv run ruff check .
+uv run ruff format --check .
+uv run moto-server serve      # needs MOTO_API_TOKEN
+MOTO_API_TOKEN=... docker compose up --build
+```
+
+See README.md for the CLI, HTTP API, storage layout and environment variables.
+
 ## Context
 
 ARCHITECTURE §7 · `../moto-vehicle-defs/docs/phase0-data-collection-plan.md` §3, §8 · `../moto-vehicle-defs/docs/hardware-architecture.md` §5b.8.

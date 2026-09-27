@@ -1,0 +1,14 @@
+services:
+  moto-server:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      MOTO_API_TOKEN: ${MOTO_API_TOKEN:?set MOTO_API_TOKEN in the environment or a .env file}
+      MOTO_DATA_DIR: /data
+      MOTO_MAX_UPLOAD_MB: ${MOTO_MAX_UPLOAD_MB:-100}
+    volumes:
+      - moto-server-data:/data
+
+volumes:
+  moto-server-data:
