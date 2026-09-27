@@ -1,0 +1,8 @@
+rx_utc_iso,rx_mono_ms,event,detail
+2026-01-15T13:00:00.000Z,5000,recording_started,
+2026-01-15T13:00:00.000Z,5000,packet_version,version=3
+2026-01-15T13:00:01.000Z,5100,can_health,state=errorWarning;tec=100;rec=50;bus_off=0;flags=1
+2026-01-15T13:00:02.000Z,5200,can_health,state=busOff;tec=255;rec=255;bus_off=1;flags=1
+2026-01-15T13:00:02.000Z,5200,did_unanswered,count=2;delta=2
+2026-01-15T13:00:03.000Z,5300,can_health,state=stopped;tec=255;rec=255;bus_off=1;flags=5
+2026-01-15T13:00:04.000Z,5400,recording_stopped,

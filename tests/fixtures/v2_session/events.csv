@@ -1,0 +1,5 @@
+rx_utc_iso,rx_mono_ms,event,detail
+2026-01-15T12:00:00.000Z,1000,recording_started,
+2026-01-15T12:00:02.200Z,1200,packet_gap,lost=1
+2026-01-15T12:00:05.500Z,1500,packet_gap,lost=1
+2026-01-15T12:00:07.000Z,1700,recording_stopped,

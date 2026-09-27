@@ -1,0 +1,18 @@
+{
+  "duration_ms": 5500,
+  "packet_count": 5,
+  "lost_count": 1,
+  "loss_percent": 16.6667,
+  "decode_error_count": 0,
+  "disconnect_count": 0,
+  "first_packet_utc": "2026-01-15T13:00:00.000Z",
+  "last_packet_utc": "2026-01-15T13:00:05.000Z",
+  "packet_versions": {
+    "3": 5
+  },
+  "imu_block_count": 2,
+  "imu_sample_count": 10,
+  "imu_missing_samples": 4,
+  "imu_loss_percent": 28.5714,
+  "mtu": 185
+}
