@@ -1,7 +1,7 @@
 """Schema drift test: src/moto_server/schemas/ble_telemetry_packet_schema.json
 must stay byte-identical to moto-connectivity-node's copy (the single source
-of truth). See scripts/sync_ble_schema.sh and CI's optional MOTO_CONN_READ_TOKEN
-fetch step (same pattern as moto-mobile's CI).
+of truth). See scripts/sync_ble_schema.sh and the public raw
+fetch step in CI (same pattern as moto-mobile's CI).
 """
 
 from __future__ import annotations
