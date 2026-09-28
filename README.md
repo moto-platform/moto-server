@@ -111,7 +111,7 @@ scripts/sync_ble_schema.sh [path-to-moto-connectivity-node]   # defaults to ../m
 ```
 
 CI checks the copy hasn't drifted whenever it can reach moto-connectivity-node
-(optional `MOTO_CONN_READ_TOKEN` secret); locally, set `MOTO_CONN_SCHEMA` to
+(public raw URL, no token; D-033); locally, set `MOTO_CONN_SCHEMA` to
 that file's path to run the same check (`MOTO_SCHEMA_DRIFT_REQUIRED=1` makes
 it a hard failure instead of a skip).
 
@@ -134,3 +134,7 @@ uv run python tests/make_fixtures.py   # regenerate the committed fixtures
 Fixtures are generated from the schema itself (`ble_schema.pack_fields`), not
 hand-written byte offsets; regenerate and commit them if the fixture
 scenarios need to change.
+
+## License
+
+MIT, see `LICENSE` (D-036).
