@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from moto_server.config import Settings
+from moto_server.decode import ContractError
 from moto_server.ingest import InvalidSessionError, SessionConflictError, ingest_path
 
 from .conftest import copy_fixture, zip_fixture
@@ -107,4 +108,30 @@ def test_ingest_conflict_same_id_different_content(
     events_path.write_text(events_path.read_text() + "2026-01-15T12:00:07.000Z,1700,note,changed\n")
 
     with pytest.raises(SessionConflictError):
+        ingest_path(session_dir, settings)
+
+
+def test_ingest_v4_session_zip(settings: Settings, fixtures_dir: Path, tmp_path: Path):
+    zip_path = zip_fixture(fixtures_dir / "v4_session", tmp_path / "v4.zip")
+    result = ingest_path(zip_path, settings)
+    assert result.created is True
+    assert result.session_id == "20260115-140000-e5f6"
+    assert result.report["telemetry_layout"] == "v4"
+    assert result.report["status"] == "ok"
+    session_dir = settings.sessions_dir / result.session_id
+    assert (session_dir / "parquet" / "telemetry.parquet").is_file()
+    assert not (session_dir / "parquet" / "imu.parquet").exists()
+    # An identical re-upload stays idempotent with the new columns.
+    assert ingest_path(zip_path, settings).created is False
+
+
+def test_ingest_partial_tester_columns_rejected(
+    settings: Settings, fixtures_dir: Path, tmp_path: Path
+):
+    # Only the exact 21 / 35 / 43 column headers are known contracts.
+    session_dir = copy_fixture(fixtures_dir / "v4_session", tmp_path / "session")
+    telemetry_path = session_dir / "telemetry.csv"
+    lines = telemetry_path.read_text().splitlines()
+    telemetry_path.write_text("\n".join(",".join(x.split(",")[:-1]) for x in lines) + "\n")
+    with pytest.raises(ContractError, match="unrecognized telemetry.csv header"):
         ingest_path(session_dir, settings)

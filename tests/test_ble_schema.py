@@ -3,8 +3,13 @@ from __future__ import annotations
 import pytest
 
 from moto_server import ble_schema
+from moto_server.decode import V4_EXTRA_HEADER, csv_column_for_field
+from moto_server.defs import ble as defs_ble
 
 SCHEMA = ble_schema.load_default_schema()
+
+V3_BYTES = defs_ble.TOTAL_BYTES_BY_VERSION[3]
+V4_BYTES = defs_ble.TOTAL_BYTES_BY_VERSION[4]
 
 
 def _pack_v3(**overrides) -> bytes:
@@ -34,7 +39,44 @@ def _pack_v3(**overrides) -> bytes:
         "canFlags": 1,
     }
     values.update(overrides)
-    return ble_schema.pack_fields(values, SCHEMA["fields"], SCHEMA["totalBytes"])
+    return ble_schema.pack_fields(values, defs_ble.telemetry_fields(3), V3_BYTES)
+
+
+def _pack_v4(**overrides) -> bytes:
+    values = {
+        "stepGapMaxMs": 12,
+        "stepGapOverCount": 1,
+        "rttDid": 0xF40C,
+        "rttMinMs": 4,
+        "rttMaxMs": 11,
+        "rttSumMs": 100,
+        "rttCount": 14,
+        "rttNrc78Count": 2,
+    }
+    # Everything else is the v3 body, so v3/v4 differ only in the version byte and the tail.
+    values.update({"version": 4, "seq": 6, "deviceTimeMs": 123556, "rpm": 3100, **overrides})
+    base = {
+        "speed": 80,
+        "coolantTemp": 90,
+        "throttlePos": 45,
+        "batteryVolt": 12400,
+        "leanAngle": -32768,
+        "maxLeanRight": -32768,
+        "maxLeanLeft": -32768,
+        "flags": 0b11011111,
+        "rpmAgeMs": 10,
+        "speedAgeMs": 20,
+        "coolantTempAgeMs": 30,
+        "throttlePosAgeMs": 40,
+        "batteryVoltAgeMs": 50,
+        "canBusState": 1,
+        "canTxErrorCount": 2,
+        "canRxErrorCount": 3,
+        "canBusOffCount": 0,
+        "unansweredDidCount": 1,
+        "canFlags": 1,
+    }
+    return ble_schema.pack_fields({**base, **values}, defs_ble.telemetry_fields(4), V4_BYTES)
 
 
 def _pack_v2(**overrides) -> bytes:
@@ -101,10 +143,75 @@ def test_decode_telemetry_unknown_version_rejected():
         ble_schema.decode_telemetry(bytes(raw))
 
 
+def test_decode_telemetry_v3_has_no_tester_stats():
+    # v3 uses only the fields without sinceVersion 4: a 37-byte packet decodes.
+    assert len(_pack_v3()) == V3_BYTES == 37
+    decoded = ble_schema.decode_telemetry(_pack_v3())
+    assert decoded["tester_stats"] is None
+    assert not any(name in decoded["raw"] for name in ("stepGapMaxMs", "rttDid", "rttCount"))
+
+
+def test_decode_telemetry_v4_round_trip():
+    raw = _pack_v4()
+    assert len(raw) == V4_BYTES == 57
+    decoded = ble_schema.decode_telemetry(raw)
+    assert decoded["version"] == 4
+    assert decoded["seq"] == 6
+    assert decoded["device_time_ms"] == 123556
+    assert decoded["physical"]["ENGINE_SPEED"] == 3100
+    assert decoded["can_health"]["bus_state"] == "running"
+    assert decoded["tester_stats"] == {
+        "stepGapMaxMs": 12,
+        "stepGapOverCount": 1,
+        "rttDid": 0xF40C,
+        "rttMinMs": 4,
+        "rttMaxMs": 11,
+        "rttSumMs": 100,
+        "rttCount": 14,
+        "rttNrc78Count": 2,
+    }
+
+
+def test_decode_telemetry_v4_uint32_fields_hold_full_range():
+    decoded = ble_schema.decode_telemetry(_pack_v4(rttSumMs=0xFFFFFFFF, rttCount=0xFFFFFFFE))
+    assert decoded["tester_stats"]["rttSumMs"] == 0xFFFFFFFF
+    assert decoded["tester_stats"]["rttCount"] == 0xFFFFFFFE
+
+
 def test_decode_telemetry_wrong_length_rejected():
     raw = _pack_v3()[:-1]
     with pytest.raises(ble_schema.DecodeError, match="expected 37 bytes"):
         ble_schema.decode_telemetry(raw)
+
+
+def test_decode_telemetry_v4_wrong_length_rejected():
+    with pytest.raises(ble_schema.DecodeError, match="telemetry v4: expected 57 bytes, got 56"):
+        ble_schema.decode_telemetry(_pack_v4()[:-1])
+    with pytest.raises(ble_schema.DecodeError, match="expected 57 bytes, got 58"):
+        ble_schema.decode_telemetry(_pack_v4() + b"\x00")
+    # A v4 version byte on a v3-sized payload is also a length error, not a v3 decode.
+    raw = bytearray(_pack_v3())
+    raw[0] = 4
+    with pytest.raises(ble_schema.DecodeError, match="expected 57 bytes, got 37"):
+        ble_schema.decode_telemetry(bytes(raw))
+
+
+def test_decode_telemetry_v2_wrong_length_rejected():
+    with pytest.raises(ble_schema.DecodeError, match="telemetry v2: expected 16 bytes"):
+        ble_schema.decode_telemetry(_pack_v2() + b"\x00")
+
+
+def test_accepted_versions_come_from_the_schema():
+    assert ble_schema.accepted_versions(SCHEMA) == list(defs_ble.ACCEPTED_VERSIONS) == [2, 3, 4]
+    raw = bytearray(_pack_v4())
+    raw[0] = 5
+    with pytest.raises(ble_schema.DecodeError, match="unsupported telemetry packet version: 5"):
+        ble_schema.decode_telemetry(bytes(raw))
+
+
+def test_v4_csv_columns_match_the_schema_tester_fields():
+    names = [f["name"] for f in ble_schema.tester_stat_fields(SCHEMA)]
+    assert [csv_column_for_field(n) for n in names] == V4_EXTRA_HEADER
 
 
 def test_decode_telemetry_empty_payload_rejected():

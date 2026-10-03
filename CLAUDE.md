@@ -10,8 +10,8 @@ The server side (Python, D-010): receives, stores, and serves ride data coming f
 
 - **Ingestion:** `POST /sessions` (FastAPI, `src/moto_server/api.py`). Multipart field `archive` = a session `.zip` written by the phone app (`moto-mobile`, BLE path of D-032). The zip holds `meta.json`, `telemetry.csv`, `events.csv`, `summary.json` and optional `imu.csv`, at the zip root or in one top-level folder. Responses: `201` created, `200` identical re-upload (idempotent), `409` same session id with different content, `422` invalid session, `413` over `MOTO_MAX_UPLOAD_MB`. The same ingest runs from the CLI (`moto-server import <folder-or-zip>`).
 - **Read API:** `GET /sessions` (list), `GET /sessions/{id}/report` (`?format=text` for a summary), `GET /health` (no auth). Everything else needs a bearer token (`MOTO_API_TOKEN`; 503 if unset).
-- **Validation and gap report (D-032, D-045):** every session gets a `report.json` with the telemetry layout/packet versions, the defs version used to decode, a raw_hex re-decode check, packet loss recomputed from `seq`, rx/device-time ordering and gaps, per-signal range/validity checks against `moto_defs`, CAN health (v3) and IMU sample-loss/scale checks. Status is `ok` / `warn` / `fail`.
-- **Storage:** files + SQLite index under `MOTO_DATA_DIR`: raw upload verbatim, decoded **Parquet** (`telemetry.parquet`, `imu.parquet`), `report.json`, `index.sqlite`. Decoding uses the BLE schema copy in `src/moto_server/schemas/` and signals from `moto_defs`, never hand-written.
+- **Validation and gap report (D-032, D-045):** every session gets a `report.json` with the telemetry layout/packet versions, the defs version used to decode, a raw_hex re-decode check, packet loss recomputed from `seq`, rx/device-time ordering and gaps, per-signal range/validity checks against `moto_defs`, CAN health (v3), tester stats (v4: last step gap, last per-DID round-trip record, D-058) and IMU sample-loss/scale checks. Status is `ok` / `warn` / `fail`.
+- **Storage:** files + SQLite index under `MOTO_DATA_DIR`: raw upload verbatim, decoded **Parquet** (`telemetry.parquet`, `imu.parquet`), `report.json`, `index.sqlite`. The decoded telemetry Parquet also carries the 8 version 4 tester columns (nullable integers, same names as in `telemetry.csv`). Decoding uses the BLE schema from the defs submodule (`moto_defs.ble.SCHEMA`, D-061; no copy in this repo, no drift test) and signals from `moto_defs`, never hand-written.
 
 ### Planned (not built yet)
 
@@ -40,7 +40,7 @@ The server side (Python, D-010): receives, stores, and serves ride data coming f
 `uv` + `ruff` + `pytest` (D-007), FastAPI. Local services run via `docker compose`.
 
 ```bash
-git submodule update --init --recursive   # external/moto-vehicle-defs, pinned to v0.1.0
+git submodule update --init --recursive   # external/moto-vehicle-defs, pinned to v0.6.0
 uv sync
 uv run pytest
 uv run ruff check .

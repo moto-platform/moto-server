@@ -2,7 +2,8 @@
 
 Column names: physical signals as `<defs signal>_<unit>` (e.g. engine_speed_rpm),
 ages as `<signal>_age_ms`, validity as `<signal>_valid` -- see signals.py for the
-naming rules, driven by moto_defs.vehicle_cl250.DIDS units.
+naming rules, driven by moto_defs.vehicle_cl250.DIDS units. The version 4 tester
+statistics keep their telemetry.csv names (step_gap_max_ms, ..., rtt_nrc78_count).
 """
 
 from __future__ import annotations
@@ -14,7 +15,13 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from moto_server import ble_schema, signals
-from moto_server.decode import DecodedTelemetryRow, decode_imu_csv, decode_telemetry_csv
+from moto_server.decode import (
+    V4_EXTRA_HEADER,
+    DecodedTelemetryRow,
+    decode_imu_csv,
+    decode_telemetry_csv,
+    decoded_tester_columns,
+)
 
 
 def build_telemetry_table(
@@ -49,7 +56,11 @@ def build_telemetry_table(
             for row in rows
         ]
 
-    return pa.table(columns)
+    # Version 4 tester statistics (D-058), taken from the raw_hex re-decode: nullable
+    # integers, null for version 2/3 rows and for sessions recorded before they existed.
+    tester = [decoded_tester_columns(row.decoded) for row in rows]
+    arrays = {col: pa.array([t[col] for t in tester], type=pa.int64()) for col in V4_EXTRA_HEADER}
+    return pa.table({**columns, **arrays})
 
 
 def build_imu_table(session_id: str, csv_path: Path, schema: dict[str, Any]) -> pa.Table:

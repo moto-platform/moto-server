@@ -1,18 +1,19 @@
 """Generic decoder for the BLE telemetry / IMU wire formats.
 
-Driven entirely by the schema JSON (src/moto_server/schemas/ble_telemetry_packet_schema.json,
-a verbatim copy of moto-connectivity-node's docs/ble_telemetry_packet_schema.json,
-kept in sync by scripts/sync_ble_schema.sh) -- this module never hardcodes a
-byte offset. See platform rule #2: signal layouts come only from the schema.
+Driven entirely by the schema from moto-vehicle-defs (``moto_defs.ble.SCHEMA``,
+generated from ``ble/ble_schema.json``, D-061; there is no copy in this repo) --
+this module never hardcodes a byte offset. See platform rule #2: signal layouts
+come only from the schema.
 """
 
 from __future__ import annotations
 
-import json
+import copy
 import struct
 from functools import lru_cache
-from importlib import resources
 from typing import Any
+
+from moto_server.defs import ble as defs_ble
 
 _STRUCT_FORMAT = {
     "uint8": "B",
@@ -29,10 +30,35 @@ class DecodeError(ValueError):
 
 @lru_cache(maxsize=1)
 def load_default_schema() -> dict[str, Any]:
-    """The schema bundled with this package (kept byte-identical to
-    moto-connectivity-node's copy; see the schema drift test)."""
-    raw = resources.files("moto_server.schemas").joinpath("ble_telemetry_packet_schema.json")
-    return json.loads(raw.read_text())
+    """The BLE schema of the pinned moto-vehicle-defs (``moto_defs.ble.SCHEMA``),
+    as a deep copy so callers can never mutate the generated module."""
+    return copy.deepcopy(defs_ble.SCHEMA)
+
+
+def accepted_versions(schema: dict[str, Any]) -> list[int]:
+    return list(schema["versioning"]["acceptedVersions"])
+
+
+def _layout_for(schema: dict[str, Any], version: int) -> tuple[list[dict], int]:
+    """(field table, total bytes) of a telemetry version, from the schema.
+
+    The fallback (low-MTU) version uses `lowMtuFallback`; every other accepted
+    version uses the top-level `fields` that exist in it (a field without
+    `sinceVersion` exists since version 3) and `totalBytesByVersion`.
+    """
+    fallback = schema["lowMtuFallback"]
+    if version == fallback["version"]:
+        return fallback["fields"], fallback["totalBytes"]
+    totals = {int(k): v for k, v in schema["totalBytesByVersion"].items()}
+    if version not in accepted_versions(schema) or version not in totals:
+        raise DecodeError(f"unsupported telemetry packet version: {version}")
+    fields = [f for f in schema["fields"] if f.get("sinceVersion", 3) <= version]
+    return fields, totals[version]
+
+
+def tester_stat_fields(schema: dict[str, Any]) -> list[dict]:
+    """The top-level fields added by version 4 (`sinceVersion` >= 4), in order."""
+    return [f for f in schema["fields"] if f.get("sinceVersion", 3) >= 4]
 
 
 def unpack_fields(raw: bytes, field_defs: list[dict]) -> dict[str, int]:
@@ -77,23 +103,17 @@ def decode_telemetry(raw: bytes, schema: dict[str, Any] | None = None) -> dict[s
     """Decodes one telemetry notification payload.
 
     Reads `version` first (per the schema's `versioning.rule`) and dispatches
-    to the version 3 (`fields`) or version 2 (`lowMtuFallback.fields`) layout.
-    Any other version raises DecodeError.
+    to the matching layout: version 4 (all `fields`), version 3 (the `fields`
+    without a `sinceVersion` of 4) or version 2 (`lowMtuFallback.fields`). The
+    payload length must equal that layout's total. Any other version raises
+    DecodeError.
     """
     schema = schema or load_default_schema()
     if not raw:
         raise DecodeError("empty telemetry payload")
 
     version = raw[0]
-    if version == schema["version"]:
-        layout = schema
-    elif version == schema["lowMtuFallback"]["version"]:
-        layout = schema["lowMtuFallback"]
-    else:
-        raise DecodeError(f"unsupported telemetry packet version: {version}")
-
-    field_defs = layout["fields"]
-    total_bytes = layout["totalBytes"]
+    field_defs, total_bytes = _layout_for(schema, version)
     if len(raw) != total_bytes:
         raise DecodeError(f"telemetry v{version}: expected {total_bytes} bytes, got {len(raw)}")
 
@@ -134,6 +154,12 @@ def decode_telemetry(raw: bytes, schema: dict[str, Any] | None = None) -> dict[s
             "flags_raw": can_flags_value,
         }
 
+    # Tester statistics (testerStats in the schema), keyed by schema field name;
+    # None for layouts that do not carry them (versions 2 and 3).
+    tester_stats = {
+        f["name"]: raw_values[f["name"]] for f in field_defs if f.get("sinceVersion", 3) >= 4
+    } or None
+
     return {
         "version": version,
         "seq": raw_values["seq"],
@@ -143,6 +169,7 @@ def decode_telemetry(raw: bytes, schema: dict[str, Any] | None = None) -> dict[s
         "ages_ms": ages_ms,
         "flags": flags,
         "can_health": can_health,
+        "tester_stats": tester_stats,
     }
 
 

@@ -10,6 +10,7 @@ report.py (validation) and parquet.py (columnar export).
 from __future__ import annotations
 
 import csv
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -56,6 +57,19 @@ V3_EXTRA_HEADER = [
     "can_flags",
 ]
 V3_HEADER = V2_HEADER + V3_EXTRA_HEADER
+# Telemetry version 4 (D-058) appends the tester statistics (schema `testerStats`).
+# The names are the schema field names in snake_case (test_ble_schema checks this).
+V4_EXTRA_HEADER = [
+    "step_gap_max_ms",
+    "step_gap_over_count",
+    "rtt_did",
+    "rtt_min_ms",
+    "rtt_max_ms",
+    "rtt_sum_ms",
+    "rtt_count",
+    "rtt_nrc78_count",
+]
+V4_HEADER = V3_HEADER + V4_EXTRA_HEADER
 
 IMU_HEADER = [
     "rx_utc_iso",
@@ -85,12 +99,30 @@ class ContractError(ValueError):
 
 
 def detect_telemetry_layout(header: list[str]) -> str:
-    """Returns "v2" or "v3" for a known header, else raises ContractError."""
+    """Returns "v2", "v3" or "v4" (the column set of the CSV) for a known header,
+    else raises ContractError. A session recorded before the version 4 columns
+    existed simply has the shorter header."""
+    if header == V4_HEADER:
+        return "v4"
     if header == V3_HEADER:
         return "v3"
     if header == V2_HEADER:
         return "v2"
     raise ContractError(f"unrecognized telemetry.csv header: {header!r}")
+
+
+def csv_column_for_field(schema_field_name: str) -> str:
+    """telemetry.csv / parquet column of a version 4 schema field: stepGapMaxMs ->
+    step_gap_max_ms, rttNrc78Count -> rtt_nrc78_count."""
+    return re.sub(r"(?<!^)(?=[A-Z])", "_", schema_field_name).lower()
+
+
+def decoded_tester_columns(decoded: dict[str, Any] | None) -> dict[str, int | None]:
+    """The version 4 tester columns of a decoded packet (all None when it has none)."""
+    stats = {
+        csv_column_for_field(k): v for k, v in ((decoded or {}).get("tester_stats") or {}).items()
+    }
+    return {col: stats.get(col) for col in V4_EXTRA_HEADER}
 
 
 def _to_int(value: str) -> int | None:
@@ -120,6 +152,7 @@ class DecodedTelemetryRow:
     app_valid: dict[str, bool | None]
     app_ages_ms: dict[str, int | None]
     app_can_health: dict[str, Any]
+    app_tester_stats: dict[str, int | None]
     decode_error: str | None = None
     decoded: dict[str, Any] | None = None
     mismatches: list[str] = field(default_factory=list)
@@ -128,7 +161,7 @@ class DecodedTelemetryRow:
 def decode_telemetry_csv(
     csv_path: Path, schema: dict[str, Any] | None = None
 ) -> tuple[str, list[DecodedTelemetryRow]]:
-    """Parses telemetry.csv, detects v2/v3 layout, and re-decodes raw_hex for every row.
+    """Parses telemetry.csv, detects the v2/v3/v4 column layout, re-decodes raw_hex per row.
 
     Returns (layout, rows). Each row's `decoded` holds our own ble_schema decode
     of raw_hex; `mismatches` lists field names where it disagrees with the
@@ -142,7 +175,7 @@ def decode_telemetry_csv(
         rows: list[DecodedTelemetryRow] = []
         for i, raw_row in enumerate(reader):
             record = dict(zip(header, raw_row, strict=True))
-            app_packet_version = _to_int(record["packet_version"]) if layout == "v3" else 2
+            app_packet_version = _to_int(record["packet_version"]) if layout != "v2" else 2
             app_physical = {
                 "ENGINE_SPEED": _to_float(record["rpm"]),
                 "VEHICLE_SPEED": _to_float(record["speed_kmh"]),
@@ -159,7 +192,10 @@ def decode_telemetry_csv(
             }
             app_ages_ms: dict[str, int | None] = {}
             app_can_health: dict[str, Any] = {}
-            if layout == "v3":
+            app_tester_stats: dict[str, int | None] = {}
+            if layout == "v4":
+                app_tester_stats = {col: _to_int(record[col]) for col in V4_EXTRA_HEADER}
+            if layout != "v2":
                 app_ages_ms = {
                     "ENGINE_SPEED": _to_int(record["rpm_age_ms"]),
                     "VEHICLE_SPEED": _to_int(record["speed_age_ms"]),
@@ -188,6 +224,7 @@ def decode_telemetry_csv(
                 app_valid=app_valid,
                 app_ages_ms=app_ages_ms,
                 app_can_health=app_can_health,
+                app_tester_stats=app_tester_stats,
             )
 
             try:
@@ -204,6 +241,12 @@ def decode_telemetry_csv(
                 server_value = row.decoded["physical"].get(defs_signal)
                 if server_value is None or abs(server_value - app_value) > 1e-6:
                     row.mismatches.append(signals.signal_key(defs_signal))
+
+            if layout == "v4":
+                server_tester = decoded_tester_columns(row.decoded)
+                row.mismatches.extend(
+                    col for col in V4_EXTRA_HEADER if app_tester_stats[col] != server_tester[col]
+                )
 
             rows.append(row)
 

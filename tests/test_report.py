@@ -6,6 +6,7 @@ import pytest
 
 from moto_server.config import Settings
 from moto_server.ingest import ingest_path
+from moto_server.report import render_text
 
 
 def test_v2_report_exact_loss_and_stale_value(settings: Settings, fixtures_dir: Path):
@@ -77,3 +78,76 @@ def test_report_fails_on_decode_error(settings: Settings, fixtures_dir: Path, tm
     result = ingest_path(session_dir, settings)
     assert result.report["status"] == "fail"
     assert len(result.report["consistency"]["decode_error_rows"]) == 1
+
+
+def test_v4_report_tester_stats(settings: Settings, fixtures_dir: Path):
+    result = ingest_path(fixtures_dir / "v4_session", settings)
+    report = result.report
+
+    assert report["telemetry_layout"] == "v4"
+    assert report["packet_versions"] == {"3": 1, "4": 6}
+    assert report["schema_versions_seen"] == [3, 4]
+    assert report["consistency"] == {"decode_error_rows": [], "mismatch_rows": []}
+    assert report["status"] == "ok"
+
+    stats = report["tester_stats"]
+    assert stats["step_gap_max_ms"] == 20
+    assert stats["step_gap_over_count"] == 2
+    assert list(stats["rtt"]) == ["0xF40C", "0xF40D", "0xF411"]
+
+    engine = stats["rtt"]["0xF40C"]
+    assert engine["name"] == "ENGINE_SPEED"
+    assert (engine["min_ms"], engine["max_ms"]) == (4, 11)
+    assert engine["avg_ms"] == pytest.approx(100 / 14)
+    assert (engine["count"], engine["nrc78_count"]) == (14, 1)
+
+    # Saturated sum and count: no average.
+    speed = stats["rtt"]["0xF40D"]
+    assert speed["avg_ms"] is None
+    assert speed["count"] == 0xFFFFFFFF
+    assert (speed["min_ms"], speed["max_ms"]) == (3, 60000)
+
+    # Only NRC 0x78 answers: no sample, so no min/max/avg.
+    throttle = stats["rtt"]["0xF411"]
+    assert (throttle["min_ms"], throttle["max_ms"], throttle["avg_ms"]) == (None, None, None)
+    assert (throttle["count"], throttle["nrc78_count"]) == (0, 3)
+
+
+def test_v4_report_text_shows_tester_stats_with_hex_dids(settings: Settings, fixtures_dir: Path):
+    result = ingest_path(fixtures_dir / "v4_session", settings)
+    text = render_text(result.report)
+    assert "tester stats: step gap max 20 ms, over client_step_max_ms 2" in text
+    assert "0xF40C (ENGINE_SPEED): rtt min 4 ms max 11 ms avg 7.1 ms, 14 sample(s)" in text
+    assert "NRC 0x78 1" in text
+    assert "0xF40D (VEHICLE_SPEED): rtt min 3 ms max 60000 ms avg n/a" in text
+    assert "0xF411 (THROTTLE_POS): rtt min n/a max n/a avg n/a, 0 sample(s), NRC 0x78 3" in text
+
+
+def test_report_without_tester_columns_has_no_tester_section(
+    settings: Settings, fixtures_dir: Path
+):
+    for name in ("v2_session", "v3_session"):
+        result = ingest_path(fixtures_dir / name, settings)
+        assert result.report["tester_stats"] is None
+        assert "tester stats" not in render_text(result.report)
+
+
+def test_v4_app_columns_disagreeing_with_raw_hex_are_flagged(
+    settings: Settings, fixtures_dir: Path, tmp_path: Path
+):
+    from .conftest import copy_fixture
+
+    session_dir = copy_fixture(fixtures_dir / "v4_session", tmp_path / "session")
+    telemetry_path = session_dir / "telemetry.csv"
+    header, *rows = telemetry_path.read_text().splitlines()
+    columns = header.split(",")
+    fields = rows[1].split(",")  # first version 4 row
+    fields[columns.index("rtt_max_ms")] = "999"  # raw_hex says 9
+    rows[1] = ",".join(fields)
+    telemetry_path.write_text("\n".join([header, *rows]) + "\n")
+
+    result = ingest_path(session_dir, settings)
+    assert result.report["consistency"]["mismatch_rows"] == [1]
+    assert result.report["status"] == "warn"
+    # The authoritative value (raw_hex) is what the report uses.
+    assert result.report["tester_stats"]["rtt"]["0xF40C"]["max_ms"] == 11
