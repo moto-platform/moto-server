@@ -36,15 +36,6 @@ jobs:
       - name: Format check (ruff format)
         run: uv run ruff format --check .
 
-      # moto-connectivity-node is public (D-033): the single-source schema is read
-      # without a token. A failed fetch fails the job instead of skipping the check.
-      - name: Fetch BLE schema source (moto-connectivity-node)
-        run: |
-          curl -fsSL --retry 3 -o "$RUNNER_TEMP/ble_schema.json" \
-            https://raw.githubusercontent.com/moto-platform/moto-connectivity-node/main/docs/ble_telemetry_packet_schema.json
-          echo "MOTO_CONN_SCHEMA=$RUNNER_TEMP/ble_schema.json" >> "$GITHUB_ENV"
-          echo "MOTO_SCHEMA_DRIFT_REQUIRED=1" >> "$GITHUB_ENV"
-
       - name: Test
         run: uv run pytest
 

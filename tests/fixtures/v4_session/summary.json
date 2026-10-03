@@ -1,0 +1,19 @@
+{
+  "duration_ms": 9700,
+  "packet_count": 7,
+  "lost_count": 0,
+  "loss_percent": 0.0,
+  "decode_error_count": 0,
+  "disconnect_count": 0,
+  "first_packet_utc": "2026-01-15T14:00:00.000Z",
+  "last_packet_utc": "2026-01-15T14:00:06.000Z",
+  "packet_versions": {
+    "3": 1,
+    "4": 6
+  },
+  "imu_block_count": 0,
+  "imu_sample_count": 0,
+  "imu_missing_samples": 0,
+  "imu_loss_percent": 0.0,
+  "mtu": 185
+}

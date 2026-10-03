@@ -11,7 +11,9 @@ from __future__ import annotations
 from moto_server.defs import vehicle_cl250
 
 # moto_defs.vehicle_cl250.DIDS[name] = (did, length, factor_num, factor_den,
-# offset, unit, min, max, poll_ms) -- see gen/python/moto_defs/vehicle_cl250.py.
+# offset, unit, min, max, poll_ms, ...) -- see gen/python/moto_defs/vehicle_cl250.py.
+# Only the indexes below are read here; trailing entries are ignored.
+_DID_ID = 0
 _DID_UNIT = 5
 _DID_MIN = 6
 _DID_MAX = 7
@@ -68,6 +70,14 @@ def age_column(defs_signal: str) -> str:
 
 def valid_column(defs_signal: str) -> str:
     return f"{signal_key(defs_signal)}_valid"
+
+
+def did_name(did: int) -> str | None:
+    """The defs signal name of a UDS DID (generated DIDS table), or None if unknown."""
+    for name, entry in vehicle_cl250.DIDS.items():
+        if entry[_DID_ID] == did:
+            return name
+    return None
 
 
 def signal_range(defs_signal: str) -> tuple[float, float]:

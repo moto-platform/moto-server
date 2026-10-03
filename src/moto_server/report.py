@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from moto_server import ble_schema, signals
-from moto_server.decode import decode_imu_csv, decode_telemetry_csv
+from moto_server.decode import decode_imu_csv, decode_telemetry_csv, decoded_tester_columns
 from moto_server.defs import defs_version
 
 # rx_mono_ms / device_time_ms gaps larger than this multiple of notifyPeriodMs
@@ -25,6 +25,53 @@ GAP_MULTIPLIER = 3
 # reboot/reset event, reported separately from ordering violations.
 _UINT32_MAX = 2**32
 _WRAP_NEAR_MAX_MARGIN = 1_000_000
+
+# Tester-stat sentinels (schema `testerStats.roundTrip` and the field descriptions):
+# min 65535 = no sample yet; sum/count at 0xFFFFFFFF are saturated, so no average.
+_RTT_MIN_NO_SAMPLE = 0xFFFF
+_UINT32_SATURATED = 0xFFFFFFFF
+
+
+def _tester_stats_summary(rows: list[Any]) -> dict[str, Any] | None:
+    """Last tester statistics of the session (version 4 rows only), or None.
+
+    step_gap_*: the last version 4 row's values (they are since-boot counters).
+    rtt: the packet carries one rotating DID record; keep the last record seen
+    per DID (rtt_did 0 = no record in that packet), keyed by the DID in hex.
+    """
+    stats_rows = [decoded_tester_columns(row.decoded) for row in rows if row.decoded]
+    stats_rows = [s for s in stats_rows if s["step_gap_max_ms"] is not None]
+    if not stats_rows:
+        return None
+
+    last_by_did: dict[int, dict[str, int]] = {}
+    for stats in stats_rows:
+        if stats["rtt_did"]:
+            last_by_did[stats["rtt_did"]] = stats
+
+    rtt: dict[str, dict[str, Any]] = {}
+    for did in sorted(last_by_did):
+        stats = last_by_did[did]
+        count = stats["rtt_count"]
+        total = stats["rtt_sum_ms"]
+        has_sample = count > 0
+        average_valid = has_sample and _UINT32_SATURATED not in (count, total)
+        rtt[f"0x{did:04X}"] = {
+            "did": did,
+            "name": signals.did_name(did),
+            "min_ms": stats["rtt_min_ms"] if has_sample else None,
+            "max_ms": stats["rtt_max_ms"] if has_sample else None,
+            "avg_ms": total / count if average_valid else None,
+            "count": count,
+            "nrc78_count": stats["rtt_nrc78_count"],
+        }
+
+    last = stats_rows[-1]
+    return {
+        "step_gap_max_ms": last["step_gap_max_ms"],
+        "step_gap_over_count": last["step_gap_over_count"],
+        "rtt": rtt,
+    }
 
 
 def build_report(
@@ -149,6 +196,8 @@ def build_report(
             "bus_states_seen": bus_states_seen,
         }
 
+    tester_stats_summary = _tester_stats_summary(rows)
+
     imu_summary = None
     imu_csv = session_dir / "imu.csv"
     if imu_csv.exists():
@@ -256,9 +305,16 @@ def build_report(
         "range_checks": range_summary,
         "valid_ratios": valid_summary,
         "can_health": can_health_summary,
+        "tester_stats": tester_stats_summary,
         "imu": imu_summary,
         "summary_json": summary,
     }
+
+
+def _fmt_ms(value: float | None) -> str:
+    if value is None:
+        return "n/a"
+    return f"{value:.1f} ms" if isinstance(value, float) else f"{value} ms"
 
 
 def render_text(report: dict[str, Any]) -> str:
@@ -305,6 +361,20 @@ def render_text(report: dict[str, Any]) -> str:
             f"latched(foreign_tester={can['latched_foreign_tester']}, "
             f"bus_off={can['latched_bus_off']}) states={can['bus_states_seen']}"
         )
+
+    tester = report.get("tester_stats")
+    if tester:
+        lines.append(
+            f"  tester stats: step gap max {tester['step_gap_max_ms']} ms, "
+            f"over client_step_max_ms {tester['step_gap_over_count']}"
+        )
+        for did_hex, item in tester["rtt"].items():
+            label = f"{did_hex} ({item['name']})" if item["name"] else did_hex
+            lines.append(
+                f"    {label}: rtt min {_fmt_ms(item['min_ms'])} max {_fmt_ms(item['max_ms'])} "
+                f"avg {_fmt_ms(item['avg_ms'])}, {item['count']} sample(s), "
+                f"NRC 0x78 {item['nrc78_count']}"
+            )
 
     if report["imu"]:
         imu = report["imu"]

@@ -16,6 +16,9 @@ import json
 from pathlib import Path
 
 from moto_server import ble_schema
+from moto_server.decode import V4_EXTRA_HEADER
+from moto_server.defs import ble as defs_ble
+from moto_server.defs import vehicle_cl250
 
 FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
 SCHEMA = ble_schema.load_default_schema()
@@ -209,8 +212,8 @@ CAN_FLAG_BITS = SCHEMA["canHealth"]["canFlags"]["bits"]
 def make_v3_fixture() -> None:
     out_dir = FIXTURES_DIR / "v3_session"
     out_dir.mkdir(parents=True, exist_ok=True)
-    fields = SCHEMA["fields"]
-    total_bytes = SCHEMA["totalBytes"]
+    fields = defs_ble.telemetry_fields(3)
+    total_bytes = defs_ble.TOTAL_BYTES_BY_VERSION[3]
 
     # seq has one single-packet gap: 10,11,13,14,15 (lost after seq=11).
     seqs = [10, 11, 13, 14, 15]
@@ -530,9 +533,257 @@ def make_v3_imu_csv(path: Path) -> None:
     )
 
 
+# ---------------------------------------------------------------------------
+# v4 session: the 43-column telemetry.csv. Row 0 is a version 3 packet (the 8
+# tester columns empty, as the app writes them), rows 1..6 are version 4
+# packets with a rotating round-trip DID. DIDs come from the generated defs.
+# ---------------------------------------------------------------------------
+
+V4_SESSION_ID = "20260115-140000-e5f6"
+SATURATED_U32 = 0xFFFFFFFF
+RTT_DID_A = vehicle_cl250.DIDS["ENGINE_SPEED"][0]
+RTT_DID_B = vehicle_cl250.DIDS["VEHICLE_SPEED"][0]
+RTT_DID_C = vehicle_cl250.DIDS["THROTTLE_POS"][0]
+
+# One entry per row: (version, tester statistics by schema field name).
+V4_ROWS: list[tuple[int, dict[str, int]]] = [
+    (3, {}),
+    (
+        4,
+        dict(
+            stepGapMaxMs=12,
+            stepGapOverCount=0,
+            rttDid=RTT_DID_A,
+            rttMinMs=5,
+            rttMaxMs=9,
+            rttSumMs=70,
+            rttCount=10,
+            rttNrc78Count=0,
+        ),
+    ),
+    (
+        4,
+        dict(
+            stepGapMaxMs=12,
+            stepGapOverCount=0,
+            rttDid=RTT_DID_B,
+            rttMinMs=3,
+            rttMaxMs=8,
+            rttSumMs=50,
+            rttCount=10,
+            rttNrc78Count=0,
+        ),
+    ),
+    (
+        4,
+        dict(
+            stepGapMaxMs=15,
+            stepGapOverCount=1,
+            rttDid=RTT_DID_A,
+            rttMinMs=4,
+            rttMaxMs=11,
+            rttSumMs=100,
+            rttCount=14,
+            rttNrc78Count=1,
+        ),
+    ),
+    # DID C: only NRC 0x78 answers so far, no round-trip sample.
+    (
+        4,
+        dict(
+            stepGapMaxMs=15,
+            stepGapOverCount=1,
+            rttDid=RTT_DID_C,
+            rttMinMs=65535,
+            rttMaxMs=0,
+            rttSumMs=0,
+            rttCount=0,
+            rttNrc78Count=3,
+        ),
+    ),
+    # DID B again, with the sum and the count saturated (no average).
+    (
+        4,
+        dict(
+            stepGapMaxMs=20,
+            stepGapOverCount=2,
+            rttDid=RTT_DID_B,
+            rttMinMs=3,
+            rttMaxMs=60000,
+            rttSumMs=SATURATED_U32,
+            rttCount=SATURATED_U32,
+            rttNrc78Count=0,
+        ),
+    ),
+    # No record in this packet.
+    (
+        4,
+        dict(
+            stepGapMaxMs=20,
+            stepGapOverCount=2,
+            rttDid=0,
+            rttMinMs=65535,
+            rttMaxMs=0,
+            rttSumMs=0,
+            rttCount=0,
+            rttNrc78Count=0,
+        ),
+    ),
+]
+
+
+def make_v4_fixture() -> None:
+    out_dir = FIXTURES_DIR / "v4_session"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    seqs = [20 + i for i in range(len(V4_ROWS))]
+    valid = {
+        "rpmValid",
+        "speedValid",
+        "coolantTempValid",
+        "throttlePosValid",
+        "batteryVoltValid",
+        "ecuPresent",
+    }
+    running = CAN_STATE_BY_NAME["running"]
+    can_flags = bits_to_int(CAN_FLAG_BITS, {"pollerEnabled"})
+
+    rows = []
+    for i, (version, tester) in enumerate(V4_ROWS):
+        values = {
+            "version": version,
+            "seq": seqs[i],
+            "deviceTimeMs": 9_000 + i * 100,
+            "rpm": 2000 + i,
+            "speed": 40,
+            "coolantTemp": 80,
+            "throttlePos": 10,
+            "batteryVolt": 12500,
+            "leanAngle": -32768,
+            "maxLeanRight": -32768,
+            "maxLeanLeft": -32768,
+            "flags": bits_to_int(FLAG_BITS, valid),
+            "rpmAgeMs": 10,
+            "speedAgeMs": 15,
+            "coolantTempAgeMs": 200,
+            "throttlePosAgeMs": 20,
+            "batteryVoltAgeMs": 400,
+            "canBusState": running,
+            "canTxErrorCount": 0,
+            "canRxErrorCount": 0,
+            "canBusOffCount": 0,
+            "unansweredDidCount": 0,
+            "canFlags": can_flags,
+            **tester,
+        }
+        raw = ble_schema.pack_fields(
+            values, defs_ble.telemetry_fields(version), defs_ble.TOTAL_BYTES_BY_VERSION[version]
+        )
+        tester_cells = [
+            str(tester[ble_schema_field]) if tester else ""
+            for ble_schema_field in _v4_schema_fields()
+        ]
+        rows.append(
+            [
+                f"2026-01-15T14:00:{i:02d}.000Z",
+                str(9_000 + i * 100),
+                str(seqs[i]),
+                "0",
+                raw.hex(),
+                str(values["rpm"]),
+                "40",
+                "80",
+                "10",
+                "12.500",
+                "",
+                "",
+                "",
+                "1",
+                "1",
+                "1",
+                "1",
+                "1",
+                "",
+                "1",
+                "",
+                str(version),
+                str(values["deviceTimeMs"]),
+                "10",
+                "15",
+                "200",
+                "20",
+                "400",
+                "0",
+                str(running),
+                "0",
+                "0",
+                "0",
+                "0",
+                str(can_flags),
+                *tester_cells,
+            ]
+        )
+
+    write_csv(out_dir / "telemetry.csv", _v3_telemetry_header() + V4_EXTRA_HEADER, rows)
+    write_csv(
+        out_dir / "events.csv",
+        ["rx_utc_iso", "rx_mono_ms", "event", "detail"],
+        [
+            ["2026-01-15T14:00:00.000Z", "9000", "recording_started", ""],
+            ["2026-01-15T14:00:00.000Z", "9000", "packet_version", "version=3"],
+            ["2026-01-15T14:00:01.000Z", "9100", "packet_version", "version=4"],
+            ["2026-01-15T14:00:07.000Z", "9700", "recording_stopped", ""],
+        ],
+    )
+    meta = {
+        "session_id": V4_SESSION_ID,
+        "created_utc": "2026-01-15T14:00:00.000Z",
+        "rider_name": "test-rider",
+        "rider_weight_kg": 75,
+        "extra_load_kg": 0,
+        "ambient_temp_c": 20,
+        "weather": "dry",
+        "tire_pressure_front_bar": 2.2,
+        "tire_pressure_rear_bar": 2.5,
+        "fuel_level": 0.5,
+        "vehicle_config": "stock",
+        "condition_label": "healthy",
+        "route_type": "closed course",
+        "note": "v4 fixture: one version 3 packet then version 4 tester statistics",
+        "app_version": "2.1.0",
+        "ble_schema_version": 4,
+        "device_name": "CL250-fixture",
+        "imu_block_version": 1,
+        "requested_mtu": 185,
+    }
+    (out_dir / "meta.json").write_text(json.dumps(meta, indent=2) + "\n")
+    summary = {
+        "duration_ms": 9_000 + len(rows) * 100,
+        "packet_count": len(rows),
+        "lost_count": 0,
+        "loss_percent": 0.0,
+        "decode_error_count": 0,
+        "disconnect_count": 0,
+        "first_packet_utc": "2026-01-15T14:00:00.000Z",
+        "last_packet_utc": f"2026-01-15T14:00:{len(rows) - 1:02d}.000Z",
+        "packet_versions": {"3": 1, "4": len(rows) - 1},
+        "imu_block_count": 0,
+        "imu_sample_count": 0,
+        "imu_missing_samples": 0,
+        "imu_loss_percent": 0.0,
+        "mtu": 185,
+    }
+    (out_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+
+
+def _v4_schema_fields() -> list[str]:
+    """Schema field names of the version 4 tester columns, in telemetry.csv order."""
+    return [f["name"] for f in ble_schema.tester_stat_fields(SCHEMA)]
+
+
 def main() -> None:
     make_v2_fixture()
     make_v3_fixture()
+    make_v4_fixture()
     print(f"Wrote fixtures to {FIXTURES_DIR}")
 
 

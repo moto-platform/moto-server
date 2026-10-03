@@ -1,0 +1,5 @@
+rx_utc_iso,rx_mono_ms,event,detail
+2026-01-15T14:00:00.000Z,9000,recording_started,
+2026-01-15T14:00:00.000Z,9000,packet_version,version=3
+2026-01-15T14:00:01.000Z,9100,packet_version,version=4
+2026-01-15T14:00:07.000Z,9700,recording_stopped,
