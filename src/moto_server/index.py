@@ -21,9 +21,14 @@ CREATE TABLE IF NOT EXISTS sessions (
     loss_percent REAL,
     status TEXT,
     has_imu INTEGER NOT NULL DEFAULT 0,
-    defs_version TEXT
+    defs_version TEXT,
+    has_gps INTEGER NOT NULL DEFAULT 0
 );
 """
+
+# Columns added after the first release, created on an existing index.sqlite
+# by _migrate() (additive only; CREATE TABLE IF NOT EXISTS never alters a table).
+_ADDED_COLUMNS = {"has_gps": "INTEGER NOT NULL DEFAULT 0"}
 
 
 @dataclass
@@ -39,6 +44,7 @@ class SessionIndexRow:
     status: str | None
     has_imu: bool
     defs_version: str | None
+    has_gps: bool = False
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> SessionIndexRow:
@@ -54,7 +60,15 @@ class SessionIndexRow:
             status=row["status"],
             has_imu=bool(row["has_imu"]),
             defs_version=row["defs_version"],
+            has_gps=bool(row["has_gps"]),
         )
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    existing = {r["name"] for r in conn.execute("PRAGMA table_info(sessions)")}
+    for name, decl in _ADDED_COLUMNS.items():
+        if name not in existing:
+            conn.execute(f"ALTER TABLE sessions ADD COLUMN {name} {decl}")
 
 
 @contextmanager
@@ -64,6 +78,7 @@ def _connect(db_path: Path) -> Iterator[sqlite3.Connection]:
     conn.row_factory = sqlite3.Row
     try:
         conn.execute(_SCHEMA)
+        _migrate(conn)
         yield conn
         conn.commit()
     finally:
@@ -76,8 +91,9 @@ def upsert_session(db_path: Path, row: SessionIndexRow) -> None:
             """
             INSERT INTO sessions (
                 session_id, created_utc, imported_utc, content_hash, app_version,
-                ble_schema_version, packet_count, loss_percent, status, has_imu, defs_version
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ble_schema_version, packet_count, loss_percent, status, has_imu, defs_version,
+                has_gps
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(session_id) DO UPDATE SET
                 created_utc=excluded.created_utc,
                 imported_utc=excluded.imported_utc,
@@ -88,7 +104,8 @@ def upsert_session(db_path: Path, row: SessionIndexRow) -> None:
                 loss_percent=excluded.loss_percent,
                 status=excluded.status,
                 has_imu=excluded.has_imu,
-                defs_version=excluded.defs_version
+                defs_version=excluded.defs_version,
+                has_gps=excluded.has_gps
             """,
             (
                 row.session_id,
@@ -102,6 +119,7 @@ def upsert_session(db_path: Path, row: SessionIndexRow) -> None:
                 row.status,
                 int(row.has_imu),
                 row.defs_version,
+                int(row.has_gps),
             ),
         )
 
@@ -132,4 +150,5 @@ def as_dict(row: SessionIndexRow) -> dict[str, Any]:
         "status": row.status,
         "has_imu": row.has_imu,
         "defs_version": row.defs_version,
+        "has_gps": row.has_gps,
     }

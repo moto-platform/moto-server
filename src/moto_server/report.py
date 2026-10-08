@@ -12,7 +12,12 @@ from pathlib import Path
 from typing import Any
 
 from moto_server import ble_schema, signals
-from moto_server.decode import decode_imu_csv, decode_telemetry_csv, decoded_tester_columns
+from moto_server.decode import (
+    decode_gps_csv,
+    decode_imu_csv,
+    decode_telemetry_csv,
+    decoded_tester_columns,
+)
 from moto_server.defs import defs_version
 
 # rx_mono_ms / device_time_ms gaps larger than this multiple of notifyPeriodMs
@@ -71,6 +76,64 @@ def _tester_stats_summary(rows: list[Any]) -> dict[str, Any] | None:
         "step_gap_max_ms": last["step_gap_max_ms"],
         "step_gap_over_count": last["step_gap_over_count"],
         "rtt": rtt,
+    }
+
+
+# gpsBlock.fixType.rule: the speed check of D-060 item 4 uses only blocks with
+# these fix types (schema value names) and flags.gnssFixOk set.
+_GPS_SPEED_CHECK_FIX_TYPES = ("fix3d", "gnssDeadReckoning")
+
+
+def _gps_summary(gps_csv: Path, schema: dict[str, Any]) -> dict[str, Any]:
+    """GPS block statistics (D-060), all re-derived from raw_hex.
+
+    `lost_or_skipped_blocks` comes from seq gaps, which count both blocks lost
+    on the radio and blocks the node skipped because the MTU was too small
+    (gpsBlock.sequenceRule, D-062 item 2), so it is not a radio-loss figure.
+    The parseError / uartOverflow flags cover the interval since the previous
+    block, sent or skipped.
+    """
+    gps_rows = decode_gps_csv(gps_csv, schema)
+    decoded_rows = [row for row in gps_rows if row.decoded]
+
+    lost_total = 0
+    prev_seq = None
+    for row in gps_rows:
+        if prev_seq is not None:
+            lost_total += (row.seq - prev_seq - 1) % 256
+        prev_seq = row.seq
+    total_expected = lost_total + len(gps_rows)
+
+    effective_rate_hz = None
+    if len(decoded_rows) >= 2:
+        duration_ms = (
+            decoded_rows[-1].decoded["device_time_ms"] - decoded_rows[0].decoded["device_time_ms"]
+        ) % _UINT32_MAX
+        if duration_ms:
+            effective_rate_hz = (len(decoded_rows) - 1) / (duration_ms / 1000.0)
+
+    fix_types: dict[str, int] = {}
+    usable = 0
+    for row in decoded_rows:
+        name = row.decoded["fix_type_name"] or f"unknown({row.decoded['raw']['fixType']})"
+        fix_types[name] = fix_types.get(name, 0) + 1
+        if name in _GPS_SPEED_CHECK_FIX_TYPES and row.decoded["flags"]["gnssFixOk"]:
+            usable += 1
+
+    return {
+        "block_count": len(gps_rows),
+        "lost_or_skipped_blocks": lost_total,
+        "lost_or_skipped_percent": (lost_total / total_expected * 100) if total_expected else 0.0,
+        "effective_rate_hz": effective_rate_hz,
+        "decode_error_rows": [row.row_index for row in gps_rows if row.decode_error],
+        "mismatch_rows": [row.row_index for row in gps_rows if row.mismatches],
+        "fix_types": dict(sorted(fix_types.items())),
+        "speed_check_usable_blocks": usable,
+        "speed_check_usable_percent": (usable / len(decoded_rows) * 100) if decoded_rows else 0.0,
+        "blocks_with_parse_error": sum(row.decoded["flags"]["parseError"] for row in decoded_rows),
+        "blocks_with_uart_overflow": sum(
+            row.decoded["flags"]["uartOverflow"] for row in decoded_rows
+        ),
     }
 
 
@@ -248,6 +311,9 @@ def build_report(
             "blocks_with_sensor_reconfigured": sensor_reconfigured_blocks,
         }
 
+    gps_csv = session_dir / "gps.csv"
+    gps_summary = _gps_summary(gps_csv, schema) if gps_csv.exists() else None
+
     status = "ok"
     reasons: list[str] = []
 
@@ -260,6 +326,11 @@ def build_report(
     if decode_error_rows:
         status = "fail"
         reasons.append(f"{len(decode_error_rows)} telemetry row(s) failed to decode from raw_hex")
+    if gps_summary and gps_summary["decode_error_rows"]:
+        status = "fail"
+        reasons.append(
+            f"{len(gps_summary['decode_error_rows'])} GPS row(s) failed to decode from raw_hex"
+        )
     if any(item["out_of_range_count"] for item in range_summary.values()):
         warn("one or more signals had out-of-range values")
     if loss_percent > 1.0:
@@ -277,6 +348,21 @@ def build_report(
             f"{imu_summary['blocks_with_sensor_reconfigured']} IMU block(s) after a sensor "
             "reconfiguration (samples before may be stale or wrong-scale)"
         )
+    if gps_summary:
+        if gps_summary["mismatch_rows"]:
+            warn(
+                f"{len(gps_summary['mismatch_rows'])} GPS row(s) disagree with the app's own "
+                "decoded columns"
+            )
+        if gps_summary["lost_or_skipped_blocks"]:
+            warn(f"{gps_summary['lost_or_skipped_blocks']} GPS block(s) lost or MTU-skipped")
+        if gps_summary["blocks_with_parse_error"] or gps_summary["blocks_with_uart_overflow"]:
+            warn(
+                f"GPS node errors: parse error in {gps_summary['blocks_with_parse_error']} "
+                f"block(s), UART overflow in {gps_summary['blocks_with_uart_overflow']} block(s)"
+            )
+        if gps_summary["block_count"] and not gps_summary["speed_check_usable_blocks"]:
+            warn("no GPS block is usable for the speed check (no 3-D fix with gnssFixOk)")
     if not reasons:
         reasons.append("no issues found")
 
@@ -307,6 +393,7 @@ def build_report(
         "can_health": can_health_summary,
         "tester_stats": tester_stats_summary,
         "imu": imu_summary,
+        "gps": gps_summary,
         "summary_json": summary,
     }
 
@@ -392,6 +479,21 @@ def render_text(report: dict[str, Any]) -> str:
             lines.append(
                 f"    device overflow: {imu['blocks_with_device_overflow']} block(s), "
                 f"read error: {imu['blocks_with_read_error']} block(s)"
+            )
+
+    gps = report.get("gps")
+    if gps:
+        rate = f"{gps['effective_rate_hz']:.1f} Hz" if gps["effective_rate_hz"] else "n/a"
+        lines.append(
+            f"  GPS: {gps['block_count']} block(s), {gps['lost_or_skipped_blocks']} lost or "
+            f"MTU-skipped ({gps['lost_or_skipped_percent']:.2f}%), effective rate {rate}, "
+            f"usable for the speed check {gps['speed_check_usable_percent']:.1f}%"
+        )
+        lines.append(f"    fix types: {gps['fix_types']}")
+        if gps["blocks_with_parse_error"] or gps["blocks_with_uart_overflow"]:
+            lines.append(
+                f"    parse error: {gps['blocks_with_parse_error']} block(s), "
+                f"UART overflow: {gps['blocks_with_uart_overflow']} block(s)"
             )
 
     return "\n".join(lines) + "\n"

@@ -1,0 +1,22 @@
+{
+  "session_id": "20260115-150000-a7b8",
+  "created_utc": "2026-01-15T15:00:00.000Z",
+  "rider_name": "test-rider",
+  "rider_weight_kg": 75,
+  "extra_load_kg": 0,
+  "ambient_temp_c": 20,
+  "weather": "dry",
+  "tire_pressure_front_bar": 2.2,
+  "tire_pressure_rear_bar": 2.5,
+  "fuel_level": 0.5,
+  "vehicle_config": "stock",
+  "condition_label": "healthy",
+  "route_type": "closed course",
+  "note": "v4 + GPS fixture: speed and heading blocks (D-060), no position",
+  "app_version": "2.2.0",
+  "ble_schema_version": 4,
+  "device_name": "CL250-fixture",
+  "imu_block_version": 1,
+  "requested_mtu": 185,
+  "gps_block_version": 1
+}
