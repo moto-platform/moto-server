@@ -43,7 +43,7 @@ AuthDep = Depends(require_token)
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
-    app = FastAPI(title="moto-server", version="0.1.0")
+    app = FastAPI(title="moto-server", version="0.2.0")
     app.state.settings = settings or load_settings()
 
     @app.get("/health")
