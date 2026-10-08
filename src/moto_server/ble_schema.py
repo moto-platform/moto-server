@@ -1,4 +1,4 @@
-"""Generic decoder for the BLE telemetry / IMU wire formats.
+"""Generic decoder for the BLE telemetry / IMU / GPS wire formats.
 
 Driven entirely by the schema from moto-vehicle-defs (``moto_defs.ble.SCHEMA``,
 generated from ``ble/ble_schema.json``, D-061; there is no copy in this repo) --
@@ -21,11 +21,12 @@ _STRUCT_FORMAT = {
     "uint16": "H",
     "int16": "h",
     "uint32": "I",
+    "int32": "i",
 }
 
 
 class DecodeError(ValueError):
-    """A telemetry/IMU payload could not be decoded against the schema."""
+    """A telemetry/IMU/GPS payload could not be decoded against the schema."""
 
 
 @lru_cache(maxsize=1)
@@ -237,4 +238,43 @@ def decode_imu_block(raw: bytes, schema: dict[str, Any] | None = None) -> dict[s
         "sample_period_ms": sample_period_ms,
         "flags": flags,
         "samples": samples,
+    }
+
+
+def decode_gps_block(raw: bytes, schema: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Decodes one GPS BLE notification payload (D-060: speed and heading only).
+
+    The block has a fixed size (`gpsBlock.totalBytes`) and is never truncated
+    (`mtuRule`), so any other length is an error, as is any version other than
+    `gpsBlock.version`. Returns the raw field values keyed by schema field name,
+    the scaled values, the decoded flags and the fixType name.
+    """
+    schema = schema or load_default_schema()
+    gps = schema["gpsBlock"]
+    if len(raw) != gps["totalBytes"]:
+        raise DecodeError(f"gps block: expected {gps['totalBytes']} bytes, got {len(raw)}")
+
+    raw_values = unpack_fields(raw, gps["fields"])
+    if raw_values["version"] != gps["version"]:
+        raise DecodeError(f"unsupported GPS block version: {raw_values['version']}")
+
+    speed_lsb = gps["scale"]["speed"]["lsbPerUnit"]
+    heading_lsb = gps["scale"]["heading"]["lsbPerUnit"]
+    fix_type_name = next(
+        (v["name"] for v in gps["fixType"]["values"] if v["value"] == raw_values["fixType"]),
+        None,
+    )
+    return {
+        "version": raw_values["version"],
+        "seq": raw_values["seq"],
+        "device_time_ms": raw_values["deviceTimeMs"],
+        "raw": raw_values,
+        "scaled": {
+            "ground_speed_mps": raw_values["groundSpeed"] / speed_lsb,
+            "heading_of_motion_deg": raw_values["headingOfMotion"] / heading_lsb,
+            "speed_accuracy_mps": raw_values["speedAccuracy"] / speed_lsb,
+            "heading_accuracy_deg": raw_values["headingAccuracy"] / heading_lsb,
+        },
+        "fix_type_name": fix_type_name,
+        "flags": decode_flags(raw_values["flags"], gps["flags"]["bits"]),
     }

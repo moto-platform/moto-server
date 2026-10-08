@@ -16,7 +16,7 @@ import json
 from pathlib import Path
 
 from moto_server import ble_schema
-from moto_server.decode import V4_EXTRA_HEADER
+from moto_server.decode import GPS_HEADER, V4_EXTRA_HEADER
 from moto_server.defs import ble as defs_ble
 from moto_server.defs import vehicle_cl250
 
@@ -780,10 +780,133 @@ def _v4_schema_fields() -> list[str]:
     return [f["name"] for f in ble_schema.tester_stat_fields(SCHEMA)]
 
 
+# ---------------------------------------------------------------------------
+# v4 + GPS session (D-060): the v4 telemetry plus gps.csv. Scenario: no fix,
+# 2-D fix, then 3-D fix; a 2-block seq gap (253, 254 lost or MTU-skipped); the
+# 255 -> 0 seq wrap (no gap); one parseError and one uartOverflow block; a
+# gnssDeadReckoning block; a fix3d block without gnssFixOk (not usable).
+# ---------------------------------------------------------------------------
+
+V4_GPS_SESSION_ID = "20260115-150000-a7b8"
+GPS = SCHEMA["gpsBlock"]
+GPS_FIX = {v["name"]: v["value"] for v in GPS["fixType"]["values"]}
+GPS_FLAG_BITS = GPS["flags"]["bits"]
+GPS_SPEED_LSB = GPS["scale"]["speed"]["lsbPerUnit"]
+GPS_HEADING_LSB = GPS["scale"]["heading"]["lsbPerUnit"]
+
+# (seq, deviceTimeMs, groundSpeed mm/s, headingOfMotion 1e-5 deg, speedAccuracy,
+#  headingAccuracy, fixType name, numSv, set flag names)
+V4_GPS_BLOCKS = [
+    (250, 9_000, 0, 0, 5_000, 18_000_000, "noFix", 0, set()),
+    (251, 9_100, 150, 0, 2_500, 9_000_000, "fix2d", 5, set()),
+    (252, 9_200, 11_111, 9_012_345, 300, 50_000, "fix3d", 9, {"gnssFixOk"}),
+    (255, 9_500, 11_200, 9_050_000, 280, 48_000, "fix3d", 10, {"gnssFixOk", "parseError"}),
+    (0, 9_600, 11_250, 9_100_000, 280, 47_000, "fix3d", 10, {"gnssFixOk", "uartOverflow"}),
+    (1, 9_700, 11_300, 9_150_000, 290, 46_000, "gnssDeadReckoning", 10, {"gnssFixOk"}),
+    (2, 9_800, 11_310, 9_160_000, 900, 300_000, "fix3d", 4, set()),
+]
+
+
+def make_v4_gps_fixture() -> None:
+    out_dir = FIXTURES_DIR / "v4_gps_session"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    src_dir = FIXTURES_DIR / "v4_session"
+    (out_dir / "telemetry.csv").write_text((src_dir / "telemetry.csv").read_text())
+
+    rows = []
+    gap_events = []
+    prev_seq = None
+    for i, (seq, t_ms, speed, heading, s_acc, h_acc, fix, num_sv, flag_names) in enumerate(
+        V4_GPS_BLOCKS
+    ):
+        flags = bits_to_int(GPS_FLAG_BITS, flag_names)
+        values = {
+            "version": GPS["version"],
+            "seq": seq,
+            "deviceTimeMs": t_ms,
+            "groundSpeed": speed,
+            "headingOfMotion": heading,
+            "speedAccuracy": s_acc,
+            "headingAccuracy": h_acc,
+            "fixType": GPS_FIX[fix],
+            "numSv": num_sv,
+            "flags": flags,
+            "reserved": 0,
+        }
+        raw = ble_schema.pack_fields(values, defs_ble.gps_fields(), defs_ble.GPS_TOTAL_BYTES)
+        lost = 0 if prev_seq is None else (seq - prev_seq - 1) % 256
+        prev_seq = seq
+        rx_utc = f"2026-01-15T15:00:{i:02d}.000Z"
+        if lost:
+            gap_events.append([rx_utc, str(t_ms), "gps_gap", f"missing={lost};seq={seq}"])
+        rows.append(
+            [
+                rx_utc,
+                str(t_ms),
+                str(seq),
+                str(lost),
+                raw.hex(),
+                str(t_ms),
+                str(speed),
+                str(heading),
+                str(s_acc),
+                str(h_acc),
+                str(GPS_FIX[fix]),
+                str(num_sv),
+                str(flags),
+                repr(speed / GPS_SPEED_LSB),
+                repr(heading / GPS_HEADING_LSB),
+                repr(s_acc / GPS_SPEED_LSB),
+                repr(h_acc / GPS_HEADING_LSB),
+                "1" if "gnssFixOk" in flag_names else "0",
+                "1" if "parseError" in flag_names else "0",
+                "1" if "uartOverflow" in flag_names else "0",
+            ]
+        )
+    write_csv(out_dir / "gps.csv", GPS_HEADER, rows)
+
+    write_csv(
+        out_dir / "events.csv",
+        ["rx_utc_iso", "rx_mono_ms", "event", "detail"],
+        [
+            ["2026-01-15T15:00:00.000Z", "9000", "recording_started", ""],
+            ["2026-01-15T15:00:00.000Z", "9000", "packet_version", "version=3"],
+            ["2026-01-15T15:00:01.000Z", "9100", "packet_version", "version=4"],
+            *gap_events,
+            ["2026-01-15T15:00:07.000Z", "9700", "recording_stopped", ""],
+        ],
+    )
+
+    meta = json.loads((src_dir / "meta.json").read_text())
+    meta.update(
+        {
+            "session_id": V4_GPS_SESSION_ID,
+            "created_utc": "2026-01-15T15:00:00.000Z",
+            "note": "v4 + GPS fixture: speed and heading blocks (D-060), no position",
+            "app_version": "2.2.0",
+            "gps_block_version": GPS["version"],
+        }
+    )
+    (out_dir / "meta.json").write_text(json.dumps(meta, indent=2) + "\n")
+
+    summary = json.loads((src_dir / "summary.json").read_text())
+    summary.update(
+        {
+            "first_packet_utc": "2026-01-15T15:00:00.000Z",
+            "last_packet_utc": "2026-01-15T15:00:06.000Z",
+            "gps_block_count": len(rows),
+            "gps_lost_or_skipped_blocks": 2,
+            "gps_lost_or_skipped_percent": round(2 / (len(rows) + 2) * 100, 4),
+        }
+    )
+    (out_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+
+
 def main() -> None:
     make_v2_fixture()
     make_v3_fixture()
     make_v4_fixture()
+    make_v4_gps_fixture()
     print(f"Wrote fixtures to {FIXTURES_DIR}")
 
 

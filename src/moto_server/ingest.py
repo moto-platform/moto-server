@@ -2,8 +2,8 @@
 contract, stores it, and produces report.json + parquet.
 
 Storage layout under $MOTO_DATA_DIR/sessions/<session_id>/:
-    raw/       the four contract files, copied verbatim (plus imu.csv if present)
-    parquet/   telemetry.parquet (and imu.parquet)
+    raw/       the four contract files, copied verbatim (plus imu.csv / gps.csv if present)
+    parquet/   telemetry.parquet (and imu.parquet / gps.parquet)
     report.json
 """
 
@@ -26,7 +26,7 @@ from moto_server.config import Settings
 
 SESSION_ID_RE = re.compile(r"^\d{8}-\d{6}-[0-9a-f]{4}$")
 REQUIRED_FILES = {"meta.json", "telemetry.csv", "events.csv", "summary.json"}
-OPTIONAL_FILES = {"imu.csv"}
+OPTIONAL_FILES = {"imu.csv", "gps.csv"}
 ALLOWED_FILES = REQUIRED_FILES | OPTIONAL_FILES
 
 
@@ -189,6 +189,7 @@ def ingest_path(
                 loss_percent=report_dict["loss"]["loss_percent"],
                 status=report_dict["status"],
                 has_imu=(raw_dir / "imu.csv").is_file(),
+                has_gps=(raw_dir / "gps.csv").is_file(),
                 defs_version=report_dict["defs_version"],
             ),
         )

@@ -15,7 +15,7 @@ organization; see `moto-vehicle-defs/docs/ARCHITECTURE.md` for the platform pict
 ## Setup
 
 ```bash
-git submodule update --init --recursive   # external/moto-vehicle-defs, pinned to v0.6.0
+git submodule update --init --recursive   # external/moto-vehicle-defs, pinned to v0.8.0
 uv sync                                    # installs runtime + dev dependencies
 ```
 
@@ -60,7 +60,7 @@ All endpoints except `GET /health` require `Authorization: Bearer $MOTO_API_TOKE
 | `GET /sessions/{id}/report` | The session's `report.json`. Add `?format=text` for a human-readable summary. `404` for an unknown id. |
 
 A session upload is a zip with `meta.json`, `telemetry.csv`, `events.csv`,
-`summary.json` (and optional `imu.csv`) either at the zip root or inside one
+`summary.json` (and optional `imu.csv` and `gps.csv`) either at the zip root or inside one
 top-level folder -- see the session contract the phone app writes to.
 
 ## Storage layout
@@ -72,6 +72,7 @@ $MOTO_DATA_DIR/
     raw/                           # the uploaded files, verbatim
     parquet/telemetry.parquet      # decoded telemetry, one row per BLE packet (incl. tester stats)
     parquet/imu.parquet            # decoded IMU samples (if imu.csv was present)
+    parquet/gps.parquet            # decoded GPS blocks (if gps.csv was present)
     report.json                    # validation report (see below)
 ```
 
@@ -95,9 +96,10 @@ covering: which telemetry layout (v2/v3/v4) and packet versions were seen, the
 defs version used to decode it, a raw_hex re-decode vs. the app's own decoded
 columns (consistency check), packet loss recomputed from `seq`, rx/device
 time ordering and gaps, per-signal range and validity checks against
-`moto_defs.vehicle_cl250.DIDS`, CAN health (v3), tester stats (v4) and IMU
+`moto_defs.vehicle_cl250.DIDS`, CAN health (v3), tester stats (v4), IMU
 sample-loss/scale checks (recomputed from `sample_index` and `*_raw`, including
-`sensorReconfigured` blocks). Overall status is `ok` / `warn` / `fail`.
+`sensorReconfigured` blocks) and a GPS summary (see below). Overall status is
+`ok` / `warn` / `fail`.
 
 The `tester_stats` section (absent when the session has no version 4 packet) holds the
 last `step_gap_max_ms` / `step_gap_over_count` and, per `rtt_did` (keyed in hex, e.g.
@@ -116,23 +118,45 @@ not change the session status.
 
 ## BLE schema
 
-The BLE packet layouts (telemetry versions 2, 3 and 4, the IMU block) come from
+The BLE packet layouts (telemetry versions 2, 3 and 4, the IMU and GPS blocks) come from
 moto-vehicle-defs: `moto_defs.ble.SCHEMA`, generated from its `ble/ble_schema.json`
 (D-061). This repo keeps no copy and no drift test; `ble_schema.load_default_schema()`
 returns a deep copy of it and the decoder dispatches on the packet's `version` byte. A
 layout change is a defs release; bump the `external/moto-vehicle-defs` pin to take it.
 
-## Location data
+## GPS (speed and heading only)
 
-The phone app does not record GPS yet. When it does, any location column
-added here **must be stored encrypted at the disk/DB level** (platform rule:
-raw GPS never goes to the cloud unencrypted) -- do not add a plaintext
-location column without addressing that first.
+The phone records the GPS block of connectivity-node (D-060, BLE schema
+`gpsBlock`) to an optional `gps.csv`, one row per block: receive time, `seq`,
+`lost_since_prev`, `raw_hex` (26 bytes, authoritative), the raw fields
+(`device_time_ms`, `ground_speed`, `heading_of_motion`, `speed_accuracy`,
+`heading_accuracy`, `fix_type`, `num_sv`, `flags`), their scaled values (`*_mps`,
+`*_deg`) and the flag bits (`gnss_fix_ok`, `parse_error`, `uart_overflow`). The
+server re-decodes `raw_hex` and stores `gps.parquet` from it, with the same
+columns plus `fix_type_name`.
+
+The report's `gps` section (null without `gps.csv`) gives the block count, the
+blocks **lost or MTU-skipped** from `seq` gaps (the node also advances `seq` for a
+block it skips because the MTU is too small, D-062, so this is not a radio-loss
+figure), the effective rate from `device_time_ms`, the fix types seen, the share
+usable for the CAN speed check (fix3d or gnssDeadReckoning with `gnssFixOk`,
+schema `fixType.rule`) and the blocks flagged with a node parse error or UART
+overflow (each flag covers the interval since the previous block). A GPS row
+whose `raw_hex` does not decode fails the session; GPS gaps, node errors, app/
+server mismatches or no usable block make it `warn`.
+
+**No position, ever.** Latitude, longitude and height never leave
+connectivity-node (D-060 item 3, invariant 7). The `gps.csv` header must match
+exactly, so a session with any extra column (a position included) is rejected.
+A speed + heading series can still rebuild the route's shape by dead reckoning
+(D-060 item 5, accepted residual risk): in Phase 0 this server runs on the
+user's own machine, sessions with `gps.csv` must not be uploaded to a server
+that is not local, and real sessions are never committed (D-033).
 
 ## Development
 
 ```bash
-uv run pytest              # tests, including tests/fixtures/{v2,v3,v4}_session
+uv run pytest              # tests, including tests/fixtures/{v2,v3,v4,v4_gps}_session
 uv run ruff check .
 uv run ruff format --check .
 uv run python tests/make_fixtures.py   # regenerate the committed fixtures

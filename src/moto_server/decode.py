@@ -1,4 +1,4 @@
-"""Loads a session's raw CSV files and re-decodes every telemetry/IMU row.
+"""Loads a session's raw CSV files and re-decodes every telemetry/IMU/GPS row.
 
 The app's decoded CSV columns exist for convenience only; per the session
 contract, `raw_hex` is authoritative and the server always re-decodes it with
@@ -93,9 +93,40 @@ IMU_HEADER = [
     "gz_dps",
 ]
 
+# gps.csv (D-060): one row per GPS block. The raw columns are the schema's
+# gpsBlock field names in snake_case (test_ble_schema checks this); the exact
+# header check below also means no other column (e.g. a position) is accepted.
+GPS_RAW_COLUMNS = [
+    "device_time_ms",
+    "ground_speed",
+    "heading_of_motion",
+    "speed_accuracy",
+    "heading_accuracy",
+    "fix_type",
+    "num_sv",
+    "flags",
+]
+GPS_SCALED_COLUMNS = [
+    "ground_speed_mps",
+    "heading_of_motion_deg",
+    "speed_accuracy_mps",
+    "heading_accuracy_deg",
+]
+GPS_FLAG_COLUMNS = ["gnss_fix_ok", "parse_error", "uart_overflow"]
+GPS_HEADER = [
+    "rx_utc_iso",
+    "rx_mono_ms",
+    "seq",
+    "lost_since_prev",
+    "raw_hex",
+    *GPS_RAW_COLUMNS,
+    *GPS_SCALED_COLUMNS,
+    *GPS_FLAG_COLUMNS,
+]
+
 
 class ContractError(ValueError):
-    """The CSV header does not match either known telemetry.csv contract."""
+    """A CSV header does not match its known session contract."""
 
 
 def detect_telemetry_layout(header: list[str]) -> str:
@@ -326,4 +357,67 @@ def decode_imu_csv(csv_path: Path, schema: dict[str, Any] | None = None) -> list
                     mismatches=mismatches,
                 )
             )
+    return rows
+
+
+@dataclass
+class DecodedGpsRow:
+    row_index: int
+    rx_utc_iso: str
+    rx_mono_ms: int
+    seq: int
+    app_lost_since_prev: int
+    raw_hex: str
+    decode_error: str | None = None
+    decoded: dict[str, Any] | None = None
+    mismatches: list[str] = field(default_factory=list)
+
+
+def decode_gps_csv(csv_path: Path, schema: dict[str, Any] | None = None) -> list[DecodedGpsRow]:
+    """Parses gps.csv and re-decodes raw_hex per row with the schema.
+
+    Like telemetry, raw_hex is authoritative; `mismatches` lists the columns
+    where the app's own decoded values disagree with our decode.
+    """
+    schema = schema or ble_schema.load_default_schema()
+    rows: list[DecodedGpsRow] = []
+    with csv_path.open(newline="") as fh:
+        reader = csv.reader(fh)
+        header = next(reader)
+        if header != GPS_HEADER:
+            raise ContractError(f"unrecognized gps.csv header: {header!r}")
+        for i, raw_row in enumerate(reader):
+            record = dict(zip(header, raw_row, strict=True))
+            row = DecodedGpsRow(
+                row_index=i,
+                rx_utc_iso=record["rx_utc_iso"],
+                rx_mono_ms=int(record["rx_mono_ms"]),
+                seq=int(record["seq"]),
+                app_lost_since_prev=int(record["lost_since_prev"]),
+                raw_hex=record["raw_hex"],
+            )
+            try:
+                row.decoded = ble_schema.decode_gps_block(bytes.fromhex(record["raw_hex"]), schema)
+            except (ble_schema.DecodeError, ValueError) as exc:
+                row.decode_error = str(exc)
+                rows.append(row)
+                continue
+
+            decoded = row.decoded
+            if row.seq != decoded["seq"]:
+                row.mismatches.append("seq")
+            server_raw = {csv_column_for_field(k): v for k, v in decoded["raw"].items()}
+            row.mismatches.extend(
+                col for col in GPS_RAW_COLUMNS if _to_int(record[col]) != server_raw[col]
+            )
+            row.mismatches.extend(
+                col
+                for col in GPS_SCALED_COLUMNS
+                if abs(float(record[col]) - decoded["scaled"][col]) > 1e-6
+            )
+            server_flags = {csv_column_for_field(k): v for k, v in decoded["flags"].items()}
+            row.mismatches.extend(
+                col for col in GPS_FLAG_COLUMNS if _to_bool(record[col]) != server_flags[col]
+            )
+            rows.append(row)
     return rows
