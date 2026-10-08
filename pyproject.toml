@@ -1,6 +1,6 @@
 [project]
 name = "moto-server"
-version = "0.1.0"
+version = "0.2.0"
 description = "Ingestion, storage and validation of moto-platform ride sessions (D-010)."
 readme = "README.md"
 authors = [{ name = "moto-platform" }]
