@@ -8,7 +8,7 @@ verbatim as the parquet/report column prefix.
 
 from __future__ import annotations
 
-from moto_server.defs import vehicle_cl250
+from moto_server.defs import vehicle_catalog, vehicle_cl250
 
 # moto_defs.vehicle_cl250.DIDS[name] = (did, length, factor_num, factor_den,
 # offset, unit, min, max, poll_ms, ...) -- see gen/python/moto_defs/vehicle_cl250.py.
@@ -96,3 +96,22 @@ def known_defs_signals(schema: dict) -> list[str]:
         if name and name not in seen:
             seen.append(name)
     return seen
+
+
+def catalog_signal(did: int) -> tuple[str, dict] | None:
+    """(name, catalog entry) of a DID in the generated vehicle catalog (D-066: the polled
+    DIDs and the candidates alike), or None for a DID this defs version does not know."""
+    name = vehicle_catalog.BY_DID.get(did)
+    return (name, vehicle_catalog.SIGNALS[name]) if name else None
+
+
+def catalog_raw_fits(entry: dict, raw: int) -> bool:
+    """Whether a raw value fits the DID's data length (vehicleSignalBlock.decodeRule)."""
+    return raw < 1 << (8 * entry["length"])
+
+
+def catalog_value(name: str, raw: int) -> float:
+    """Physical value of a raw record value, through the catalog's own decode()
+    (raw * factor_num / factor_den + offset); the caller checks catalog_raw_fits() first."""
+    entry = vehicle_catalog.SIGNALS[name]
+    return vehicle_catalog.decode(name, raw.to_bytes(entry["length"], "big"))

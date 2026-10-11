@@ -13,11 +13,16 @@ from typing import Any
 
 from moto_server import ble_schema, signals
 from moto_server.decode import (
+    VSIG_NEGATIVE_RESPONSE,
+    VSIG_VALID,
     decode_gps_csv,
     decode_imu_csv,
+    decode_signals_csv,
     decode_telemetry_csv,
     decoded_tester_columns,
+    group_signal_blocks,
 )
+from moto_server.defs import ble as defs_ble
 from moto_server.defs import defs_version
 
 # rx_mono_ms / device_time_ms gaps larger than this multiple of notifyPeriodMs
@@ -134,6 +139,86 @@ def _gps_summary(gps_csv: Path, schema: dict[str, Any]) -> dict[str, Any]:
         "blocks_with_uart_overflow": sum(
             row.decoded["flags"]["uartOverflow"] for row in decoded_rows
         ),
+    }
+
+
+_VSIG_VALID = VSIG_VALID
+_VSIG_NEGATIVE_RESPONSE = VSIG_NEGATIVE_RESPONSE
+
+
+def _vehicle_signals_summary(
+    signals_csv: Path, schema: dict[str, Any], meta: dict[str, Any]
+) -> dict[str, Any]:
+    """Vehicle-signal block statistics (D-066 item 4), all re-derived from did + raw.
+
+    Blocks lost come from `block_seq` gaps (vehicleSignalBlock.sequenceRule), one block
+    being the consecutive rows that share their block header. `signals` has one entry
+    per DID seen, keyed by the DID in hex; a DID missing from the pinned catalog is
+    listed in `unknown_dids` and kept with its states only.
+    """
+    rows = decode_signals_csv(signals_csv, schema)
+    blocks = group_signal_blocks(rows)
+
+    lost_total = 0
+    prev_seq = None
+    for block in blocks:
+        seq = next((r.block_seq for r in block if r.block_seq is not None), None)
+        if seq is None:
+            continue
+        if prev_seq is not None:
+            lost_total += (seq - prev_seq - 1) % 256
+        prev_seq = seq
+
+    per_did: dict[int, dict[str, Any]] = {}
+    for row in rows:
+        if row.decode_error or row.did is None:
+            continue
+        item = per_did.setdefault(
+            row.did,
+            {
+                "did": row.did,
+                "name": row.signal,
+                "unit": row.unit,
+                "records": 0,
+                "states": {},
+                "valid_count": 0,
+                "min": None,
+                "max": None,
+                "last_value": None,
+                "nrcs": set(),
+            },
+        )
+        item["records"] += 1
+        item["states"][row.state_name] = item["states"].get(row.state_name, 0) + 1
+        if row.state == _VSIG_NEGATIVE_RESPONSE:  # raw holds the NRC
+            item["nrcs"].add(row.raw)
+        if row.state == _VSIG_VALID and row.value is not None:
+            item["valid_count"] += 1
+            item["min"] = row.value if item["min"] is None else min(item["min"], row.value)
+            item["max"] = row.value if item["max"] is None else max(item["max"], row.value)
+            item["last_value"] = row.value
+
+    signals_by_did: dict[str, dict[str, Any]] = {}
+    for did in sorted(per_did):
+        item = per_did[did]
+        item["states"] = dict(sorted(item["states"].items()))
+        item["nrcs"] = [f"0x{nrc:02X}" for nrc in sorted(item["nrcs"])]
+        signals_by_did[f"0x{did:04X}"] = item
+
+    block_count = len(blocks)
+    total_expected = lost_total + block_count
+    return {
+        "block_count": block_count,
+        "record_count": len(rows),
+        "lost_blocks": lost_total,
+        "lost_percent": (lost_total / total_expected * 100) if total_expected else 0.0,
+        "total_records": max((r.total_records or 0 for r in rows), default=0),
+        "decode_error_rows": [r.row_index for r in rows if r.decode_error],
+        "mismatch_rows": [r.row_index for r in rows if r.mismatches],
+        "malformed_rows": [r.row_index for r in rows if r.malformed],
+        "signals": signals_by_did,
+        "unknown_dids": [k for k, v in signals_by_did.items() if v["name"] is None],
+        "meta_block_version": meta.get("vehicle_signal_block_version"),
     }
 
 
@@ -314,6 +399,11 @@ def build_report(
     gps_csv = session_dir / "gps.csv"
     gps_summary = _gps_summary(gps_csv, schema) if gps_csv.exists() else None
 
+    signals_csv = session_dir / "signals.csv"
+    vsig_summary = (
+        _vehicle_signals_summary(signals_csv, schema, meta) if signals_csv.exists() else None
+    )
+
     status = "ok"
     reasons: list[str] = []
 
@@ -330,6 +420,11 @@ def build_report(
         status = "fail"
         reasons.append(
             f"{len(gps_summary['decode_error_rows'])} GPS row(s) failed to decode from raw_hex"
+        )
+    if vsig_summary and vsig_summary["decode_error_rows"]:
+        status = "fail"
+        reasons.append(
+            f"{len(vsig_summary['decode_error_rows'])} vehicle-signal row(s) failed validation"
         )
     if any(item["out_of_range_count"] for item in range_summary.values()):
         warn("one or more signals had out-of-range values")
@@ -363,6 +458,25 @@ def build_report(
             )
         if gps_summary["block_count"] and not gps_summary["speed_check_usable_blocks"]:
             warn("no GPS block is usable for the speed check (no 3-D fix with gnssFixOk)")
+    if vsig_summary:
+        if vsig_summary["mismatch_rows"]:
+            warn(
+                f"{len(vsig_summary['mismatch_rows'])} vehicle-signal row(s) disagree with the "
+                "app's own decoded columns"
+            )
+        if vsig_summary["malformed_rows"]:
+            warn(
+                f"{len(vsig_summary['malformed_rows'])} vehicle-signal record(s) with a raw "
+                "value that does not fit the DID's length"
+            )
+        if vsig_summary["lost_blocks"]:
+            warn(f"{vsig_summary['lost_blocks']} vehicle-signal block(s) lost")
+        meta_version = vsig_summary["meta_block_version"]
+        if meta_version is not None and meta_version != defs_ble.VSIG_BLOCK_VERSION:
+            warn(
+                f"meta vehicle_signal_block_version {meta_version} differs from the pinned "
+                f"defs version {defs_ble.VSIG_BLOCK_VERSION}"
+            )
     if not reasons:
         reasons.append("no issues found")
 
@@ -394,6 +508,7 @@ def build_report(
         "tester_stats": tester_stats_summary,
         "imu": imu_summary,
         "gps": gps_summary,
+        "vehicle_signals": vsig_summary,
         "summary_json": summary,
     }
 
@@ -495,5 +610,21 @@ def render_text(report: dict[str, Any]) -> str:
                 f"    parse error: {gps['blocks_with_parse_error']} block(s), "
                 f"UART overflow: {gps['blocks_with_uart_overflow']} block(s)"
             )
+
+    vsig = report.get("vehicle_signals")
+    if vsig:
+        lines.append(
+            f"  vehicle signals: {vsig['record_count']} record(s) in {vsig['block_count']} "
+            f"block(s), {vsig['lost_blocks']} lost ({vsig['lost_percent']:.2f}%), "
+            f"{len(vsig['signals'])} of {vsig['total_records']} table DID(s) seen"
+        )
+        for did_hex, item in vsig["signals"].items():
+            label = f"{did_hex} ({item['name'] or 'unknown DID'})"
+            detail = f"states {item['states']}"
+            if item["valid_count"]:
+                detail += f", valid {item['min']} .. {item['max']} {item['unit']}"
+            if item["nrcs"]:
+                detail += f", NRC {item['nrcs']}"
+            lines.append(f"    {label}: {detail}")
 
     return "\n".join(lines) + "\n"

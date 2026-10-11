@@ -22,13 +22,17 @@ CREATE TABLE IF NOT EXISTS sessions (
     status TEXT,
     has_imu INTEGER NOT NULL DEFAULT 0,
     defs_version TEXT,
-    has_gps INTEGER NOT NULL DEFAULT 0
+    has_gps INTEGER NOT NULL DEFAULT 0,
+    has_vehicle_signals INTEGER NOT NULL DEFAULT 0
 );
 """
 
 # Columns added after the first release, created on an existing index.sqlite
 # by _migrate() (additive only; CREATE TABLE IF NOT EXISTS never alters a table).
-_ADDED_COLUMNS = {"has_gps": "INTEGER NOT NULL DEFAULT 0"}
+_ADDED_COLUMNS = {
+    "has_gps": "INTEGER NOT NULL DEFAULT 0",
+    "has_vehicle_signals": "INTEGER NOT NULL DEFAULT 0",
+}
 
 
 @dataclass
@@ -45,6 +49,7 @@ class SessionIndexRow:
     has_imu: bool
     defs_version: str | None
     has_gps: bool = False
+    has_vehicle_signals: bool = False
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> SessionIndexRow:
@@ -61,6 +66,7 @@ class SessionIndexRow:
             has_imu=bool(row["has_imu"]),
             defs_version=row["defs_version"],
             has_gps=bool(row["has_gps"]),
+            has_vehicle_signals=bool(row["has_vehicle_signals"]),
         )
 
 
@@ -92,8 +98,8 @@ def upsert_session(db_path: Path, row: SessionIndexRow) -> None:
             INSERT INTO sessions (
                 session_id, created_utc, imported_utc, content_hash, app_version,
                 ble_schema_version, packet_count, loss_percent, status, has_imu, defs_version,
-                has_gps
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                has_gps, has_vehicle_signals
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(session_id) DO UPDATE SET
                 created_utc=excluded.created_utc,
                 imported_utc=excluded.imported_utc,
@@ -105,7 +111,8 @@ def upsert_session(db_path: Path, row: SessionIndexRow) -> None:
                 status=excluded.status,
                 has_imu=excluded.has_imu,
                 defs_version=excluded.defs_version,
-                has_gps=excluded.has_gps
+                has_gps=excluded.has_gps,
+                has_vehicle_signals=excluded.has_vehicle_signals
             """,
             (
                 row.session_id,
@@ -120,6 +127,7 @@ def upsert_session(db_path: Path, row: SessionIndexRow) -> None:
                 int(row.has_imu),
                 row.defs_version,
                 int(row.has_gps),
+                int(row.has_vehicle_signals),
             ),
         )
 
@@ -151,4 +159,5 @@ def as_dict(row: SessionIndexRow) -> dict[str, Any]:
         "has_imu": row.has_imu,
         "defs_version": row.defs_version,
         "has_gps": row.has_gps,
+        "has_vehicle_signals": row.has_vehicle_signals,
     }

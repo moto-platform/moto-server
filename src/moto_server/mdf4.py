@@ -8,7 +8,9 @@ is not yet.
 TODO(phase0 WP-2, docs/phase0-data-collection-plan.md §3.3): implement using
 the `asammdf` package (MIT licensed, reads/writes MDF3/4). Map each parquet
 column to an MDF4 channel with its physical unit (see signals.py) and group
-telemetry/imu into separate channel groups sharing the session's time base.
+telemetry/imu into separate channel groups sharing the session's time base. The vehicle
+signals (signals.parquet, D-066) become one channel per catalog signal name (`signal`, unit
+in `unit`, `value` of the valid records) timestamped by `sample_device_time_ms`.
 """
 
 from __future__ import annotations
