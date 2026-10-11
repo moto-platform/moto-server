@@ -158,6 +158,13 @@ _SIGNALS_WIRE_FIELDS = {
 }
 
 
+# States whose raw is the DID's data bytes (schema vehicleSignalBlock.rawRule), by name
+# from the generated state table, never as literal numbers.
+_VALUE_STATES = frozenset(
+    value for value, name in defs_ble.VSIG_STATES.items() if name in ("valid", "stale")
+)
+
+
 class ContractError(ValueError):
     """A CSV header does not match its known session contract."""
 
@@ -561,7 +568,7 @@ def decode_signals_csv(
                 name, entry = found
                 row.signal = name
                 row.unit = entry["unit"]
-                if row.state in (1, 2):
+                if row.state in _VALUE_STATES:
                     if signals.catalog_raw_fits(entry, row.raw):
                         row.value = signals.catalog_value(name, row.raw)
                     else:
