@@ -15,7 +15,7 @@ organization; see `moto-vehicle-defs/docs/ARCHITECTURE.md` for the platform pict
 ## Setup
 
 ```bash
-git submodule update --init --recursive   # external/moto-vehicle-defs, pinned to v0.8.0
+git submodule update --init --recursive   # external/moto-vehicle-defs, pinned to v0.11.0
 uv sync                                    # installs runtime + dev dependencies
 ```
 
@@ -60,7 +60,7 @@ All endpoints except `GET /health` require `Authorization: Bearer $MOTO_API_TOKE
 | `GET /sessions/{id}/report` | The session's `report.json`. Add `?format=text` for a human-readable summary. `404` for an unknown id. |
 
 A session upload is a zip with `meta.json`, `telemetry.csv`, `events.csv`,
-`summary.json` (and optional `imu.csv` and `gps.csv`) either at the zip root or inside one
+`summary.json` (and optional `imu.csv`, `gps.csv` and `signals.csv`) either at the zip root or inside one
 top-level folder -- see the session contract the phone app writes to.
 
 ## Storage layout
@@ -73,6 +73,7 @@ $MOTO_DATA_DIR/
     parquet/telemetry.parquet      # decoded telemetry, one row per BLE packet (incl. tester stats)
     parquet/imu.parquet            # decoded IMU samples (if imu.csv was present)
     parquet/gps.parquet            # decoded GPS blocks (if gps.csv was present)
+    parquet/signals.parquet        # vehicle-signal records (if signals.csv was present)
     report.json                    # validation report (see below)
 ```
 
@@ -98,7 +99,7 @@ columns (consistency check), packet loss recomputed from `seq`, rx/device
 time ordering and gaps, per-signal range and validity checks against
 `moto_defs.vehicle_cl250.DIDS`, CAN health (v3), tester stats (v4), IMU
 sample-loss/scale checks (recomputed from `sample_index` and `*_raw`, including
-`sensorReconfigured` blocks) and a GPS summary (see below). Overall status is
+`sensorReconfigured` blocks), a GPS summary and a vehicle-signal summary (see below). Overall status is
 `ok` / `warn` / `fail`.
 
 The `tester_stats` section (absent when the session has no version 4 packet) holds the
@@ -118,7 +119,7 @@ not change the session status.
 
 ## BLE schema
 
-The BLE packet layouts (telemetry versions 2, 3 and 4, the IMU and GPS blocks) come from
+The BLE packet layouts (telemetry versions 2, 3 and 4, the IMU, GPS and vehicle-signal blocks) come from
 moto-vehicle-defs: `moto_defs.ble.SCHEMA`, generated from its `ble/ble_schema.json`
 (D-061). This repo keeps no copy and no drift test; `ble_schema.load_default_schema()`
 returns a deep copy of it and the decoder dispatches on the packet's `version` byte. A
@@ -153,10 +154,50 @@ A speed + heading series can still rebuild the route's shape by dead reckoning
 user's own machine, sessions with `gps.csv` must not be uploaded to a server
 that is not local, and real sessions are never committed (D-033).
 
+## Vehicle signals (D-066 item 4)
+
+Every DID of the vehicle-bus tester's table travels in the generic BLE vehicle-signal
+block (schema `vehicleSignalBlock`, characteristic `vehicleSignals`; records keyed by DID,
+at most 3 blocks per 200 ms). The phone writes them to an optional `signals.csv`, one row
+per **record**; the block header (`block_seq`, `device_time_ms`, `total_records`,
+`first_record`, and the phone's receive time) is repeated on every row of a block. The
+wire values `did`, `state` (`BleVehicleSignalState`: 0 neverReceived, 1 valid, 2 stale,
+3 skipped, 4 negativeResponse), `age_ms` (sentinels `65535` = no positive answer since
+boot, `65534` = saturated) and `raw` (the data bytes as an unsigned big-endian number for
+state 1 and 2, the NRC for state 4) are authoritative. `signal` and `value` are the app's
+catalog decode. The contract source is moto-mobile's `docs/session-format.md`; the header
+must match exactly (any other column is rejected).
+
+The server validates the wire values against the schema field sizes (`did` and `age_ms`
+u16, `raw` u32, `state` a known value) and re-derives `signal` and `value` from `did` +
+`raw` with the generated vehicle catalog (`moto_defs.vehicle_catalog`: `BY_DID`, `SIGNALS`,
+`decode`), `raw * factor_num / factor_den + offset`, only for state 1 or 2 and a raw that
+fits the DID's `length`. The app's columns are a consistency check (a mismatch makes the
+session `warn`). A DID missing from the pinned catalog (a sender built from a newer defs)
+is kept with its raw value and an empty signal/value. A DID promoted from the candidate
+catalog (D-066 item 3) is handled by the catalog alone: bump the defs pin, no code change.
+
+`signals.parquet` has one row per record: `rx_utc`, `rx_mono_ms`, the block header,
+`did`, `state`, `state_name`, `age_ms`, `raw`, `signal`, `unit`, `value` and
+`sample_device_time_ms` (`device_time_ms - age_ms`: the node time of the DID's last
+positive answer, null for the sentinel ages and for states without one, so a record
+repeated by several blocks can be deduplicated). `value` is set for state `valid` only
+(a stale value is shown as unavailable; `raw` is always kept). A row whose wire values
+fail validation keeps its receive time and a `decode_error`, and fails the session.
+
+The report's `vehicle_signals` section (null without `signals.csv`) gives the block and
+record counts, the blocks lost from `block_seq` gaps (`sequenceRule`), and per DID (keyed
+in hex): the catalog name and unit, the states seen, the valid-value range, the last
+valid value and the NRCs. Lost blocks, app/server mismatches, a raw that does not fit its
+DID or a `vehicle_signal_block_version` in `meta.json` that differs from the pinned defs
+make the session `warn` (the key is absent in sessions from older app builds). Negative
+responses, stale, skipped and unknown DIDs are normal and do not. `signals.csv` holds
+engine data only (no position), so the D-063 local-only rule for `gps.csv` does not apply.
+
 ## Development
 
 ```bash
-uv run pytest              # tests, including tests/fixtures/{v2,v3,v4,v4_gps}_session
+uv run pytest              # tests, including tests/fixtures/{v2,v3,v4,v4_gps,v4_vsig}_session
 uv run ruff check .
 uv run ruff format --check .
 uv run python tests/make_fixtures.py   # regenerate the committed fixtures

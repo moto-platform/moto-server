@@ -60,7 +60,8 @@ def _cmd_list(_args: argparse.Namespace) -> int:
         print(
             f"{row.session_id}  status={row.status}  packets={row.packet_count}  "
             f"loss={row.loss_percent:.2f}%  imu={'yes' if row.has_imu else 'no'}  "
-            f"gps={'yes' if row.has_gps else 'no'}"
+            f"gps={'yes' if row.has_gps else 'no'}  "
+            f"signals={'yes' if row.has_vehicle_signals else 'no'}"
         )
     return EXIT_OK_OR_WARN
 

@@ -1,4 +1,4 @@
-"""Loads a session's raw CSV files and re-decodes every telemetry/IMU/GPS row.
+"""Loads a session's raw CSV files and re-decodes every telemetry/IMU/GPS/signals row.
 
 The app's decoded CSV columns exist for convenience only; per the session
 contract, `raw_hex` is authoritative and the server always re-decodes it with
@@ -10,12 +10,14 @@ report.py (validation) and parquet.py (columnar export).
 from __future__ import annotations
 
 import csv
+import math
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from moto_server import ble_schema, signals
+from moto_server.defs import ble as defs_ble
 
 V2_HEADER = [
     "rx_utc_iso",
@@ -123,6 +125,37 @@ GPS_HEADER = [
     *GPS_SCALED_COLUMNS,
     *GPS_FLAG_COLUMNS,
 ]
+
+# signals.csv (D-066 item 4): one row per vehicle-signal *record*; the block header
+# fields are repeated on every row of a block. did / state / age_ms / raw are the wire
+# values and authoritative; signal / value are the app's catalog decode (a check only).
+SIGNALS_HEADER = [
+    "rx_utc_iso",
+    "rx_mono_ms",
+    "block_seq",
+    "lost_since_prev",
+    "device_time_ms",
+    "total_records",
+    "first_record",
+    "did",
+    "state",
+    "age_ms",
+    "raw",
+    "signal",
+    "value",
+]
+# Columns that hold a wire field -> the field name in schema vehicleSignalBlock
+# (headerFields / recordFields); the value range comes from that field's size.
+_SIGNALS_WIRE_FIELDS = {
+    "block_seq": "seq",
+    "device_time_ms": "deviceTimeMs",
+    "total_records": "totalRecords",
+    "first_record": "firstRecord",
+    "did": "did",
+    "state": "state",
+    "age_ms": "ageMs",
+    "raw": "raw",
+}
 
 
 class ContractError(ValueError):
@@ -421,3 +454,132 @@ def decode_gps_csv(csv_path: Path, schema: dict[str, Any] | None = None) -> list
             )
             rows.append(row)
     return rows
+
+
+@dataclass
+class DecodedSignalRow:
+    row_index: int
+    rx_utc_iso: str
+    rx_mono_ms: int
+    # The block header cells as written, to group rows into blocks even when a
+    # wire field of the row is invalid.
+    block_key: tuple[str, str, str, str]
+    app_lost_since_prev: int | None = None
+    block_seq: int | None = None
+    device_time_ms: int | None = None
+    total_records: int | None = None
+    first_record: int | None = None
+    did: int | None = None
+    state: int | None = None
+    state_name: str | None = None
+    age_ms: int | None = None
+    raw: int | None = None
+    # Our own catalog decode of did + raw (None: unknown DID, state without a value,
+    # or a raw that does not fit the DID's length).
+    signal: str | None = None
+    unit: str | None = None
+    value: float | None = None
+    # State 1 or 2 with a known DID but a raw above 2^(8*length) - 1: malformed
+    # (vehicleSignalBlock.decodeRule), kept out of the signal outputs.
+    malformed: bool = False
+    decode_error: str | None = None
+    mismatches: list[str] = field(default_factory=list)
+
+
+def _wire_int(record: dict[str, str], column: str, vsig: dict[str, Any]) -> int:
+    """An unsigned integer cell, range-checked against its schema field's size."""
+    field_name = _SIGNALS_WIRE_FIELDS[column]
+    schema_field = next(
+        f for f in (*vsig["headerFields"], *vsig["recordFields"]) if f["name"] == field_name
+    )
+    try:
+        number = int(record[column])
+    except ValueError:
+        raise ble_schema.DecodeError(f"{column}: not an integer: {record[column]!r}") from None
+    if not 0 <= number < 1 << (8 * schema_field["size"]):
+        raise ble_schema.DecodeError(f"{column}: {number} is out of range for {field_name}")
+    return number
+
+
+def _same_value(app_cell: str, server_value: float | None) -> bool:
+    if app_cell == "" or server_value is None:
+        return app_cell == "" and server_value is None
+    try:
+        return math.isclose(float(app_cell), server_value, rel_tol=1e-9, abs_tol=1e-9)
+    except ValueError:
+        return False
+
+
+def decode_signals_csv(
+    csv_path: Path, schema: dict[str, Any] | None = None
+) -> list[DecodedSignalRow]:
+    """Parses signals.csv and re-derives `signal` / `value` from `did` + `raw`.
+
+    The wire columns (did, state, age_ms, raw and the block header) are validated
+    against the schema; a row that fails keeps its receive time and gets a
+    `decode_error`. The app's `signal` / `value` columns are only compared with the
+    recomputation from the generated vehicle catalog (`mismatches`).
+    """
+    schema = schema or ble_schema.load_default_schema()
+    vsig = schema["vehicleSignalBlock"]
+    rows: list[DecodedSignalRow] = []
+    with csv_path.open(newline="") as fh:
+        reader = csv.reader(fh)
+        header = next(reader)
+        if header != SIGNALS_HEADER:
+            raise ContractError(f"unrecognized signals.csv header: {header!r}")
+        for i, raw_row in enumerate(reader):
+            record = dict(zip(header, raw_row, strict=True))
+            row = DecodedSignalRow(
+                row_index=i,
+                rx_utc_iso=record["rx_utc_iso"],
+                rx_mono_ms=int(record["rx_mono_ms"]),
+                block_key=(
+                    record["block_seq"],
+                    record["rx_mono_ms"],
+                    record["device_time_ms"],
+                    record["first_record"],
+                ),
+            )
+            rows.append(row)
+            try:
+                row.app_lost_since_prev = int(record["lost_since_prev"])
+                for column in _SIGNALS_WIRE_FIELDS:
+                    setattr(row, column, _wire_int(record, column, vsig))
+                if row.state not in defs_ble.VSIG_STATES:
+                    raise ble_schema.DecodeError(f"state: unknown value {row.state}")
+            except (ble_schema.DecodeError, ValueError) as exc:
+                row.decode_error = str(exc)
+                for column in _SIGNALS_WIRE_FIELDS:
+                    setattr(row, column, None)  # no half-parsed record
+                continue
+
+            assert row.did is not None and row.state is not None and row.raw is not None
+            row.state_name = defs_ble.VSIG_STATES[row.state]
+            found = signals.catalog_signal(row.did)
+            if found is not None:
+                name, entry = found
+                row.signal = name
+                row.unit = entry["unit"]
+                if row.state in (1, 2):
+                    if signals.catalog_raw_fits(entry, row.raw):
+                        row.value = signals.catalog_value(name, row.raw)
+                    else:
+                        row.malformed = True
+
+            if record["signal"] != (row.signal or ""):
+                row.mismatches.append("signal")
+            if not _same_value(record["value"], row.value):
+                row.mismatches.append("value")
+    return rows
+
+
+def group_signal_blocks(rows: list[DecodedSignalRow]) -> list[list[DecodedSignalRow]]:
+    """Consecutive rows with the same block header cells are one block (one notification)."""
+    blocks: list[list[DecodedSignalRow]] = []
+    for row in rows:
+        if blocks and blocks[-1][0].block_key == row.block_key:
+            blocks[-1].append(row)
+        else:
+            blocks.append([row])
+    return blocks

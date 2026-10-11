@@ -16,9 +16,9 @@ import json
 from pathlib import Path
 
 from moto_server import ble_schema
-from moto_server.decode import GPS_HEADER, V4_EXTRA_HEADER
+from moto_server.decode import GPS_HEADER, SIGNALS_HEADER, V4_EXTRA_HEADER
 from moto_server.defs import ble as defs_ble
-from moto_server.defs import vehicle_cl250
+from moto_server.defs import vehicle_catalog, vehicle_cl250
 
 FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
 SCHEMA = ble_schema.load_default_schema()
@@ -902,11 +902,187 @@ def make_v4_gps_fixture() -> None:
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
 
 
+# ---------------------------------------------------------------------------
+# v4 + vehicle signals session (D-066 item 4): the v4 telemetry plus signals.csv.
+# Scenario: a sender DID table of 8 DIDs sent as blocks of 4 records, so each table
+# pass is two blocks. The first pass (seq 10, 11) has valid polled DIDs, a stale one,
+# a candidate DID (ENGINE_LOAD, D-066 item 3) in state valid, a negative response
+# (FUEL_LEVEL, NRC 0x31) and a DID missing from the catalog (a newer defs). Seq 12 and
+# 13 are lost; the second pass (seq 14, 15) has a skipped DID and new values.
+# ---------------------------------------------------------------------------
+
+V4_VSIG_SESSION_ID = "20260115-160000-c9d0"
+VSIG = SCHEMA["vehicleSignalBlock"]
+VSIG_STATE = {v["name"]: v["value"] for v in VSIG["state"]["values"]}
+# A DID no catalog contains: what a sender built from a newer defs would add.
+VSIG_UNKNOWN_DID = max(vehicle_catalog.BY_DID) + 1
+VSIG_NRC_OUT_OF_RANGE = 0x31
+
+
+def _vsig_did(name: str) -> int:
+    return vehicle_catalog.SIGNALS[name]["did"]
+
+
+# The sender's DID table, in table order.
+VSIG_TABLE = [
+    _vsig_did("ENGINE_SPEED"),
+    _vsig_did("VEHICLE_SPEED"),
+    _vsig_did("THROTTLE_POS"),
+    _vsig_did("COOLANT_TEMP"),
+    _vsig_did("BATTERY_VOLTAGE"),
+    _vsig_did("ENGINE_LOAD"),
+    _vsig_did("FUEL_LEVEL"),
+    VSIG_UNKNOWN_DID,
+]
+
+# (block seq, rx_mono_ms, {DID: (state name, age_ms, raw)}), records in table order.
+V4_VSIG_BLOCKS = [
+    (
+        10,
+        9_100,
+        {
+            _vsig_did("ENGINE_SPEED"): ("valid", 40, 12_000),
+            _vsig_did("VEHICLE_SPEED"): ("valid", 60, 40),
+            _vsig_did("THROTTLE_POS"): ("valid", 120, 26),
+            _vsig_did("COOLANT_TEMP"): ("stale", 3_000, 120),
+        },
+    ),
+    (
+        11,
+        9_200,
+        {
+            _vsig_did("BATTERY_VOLTAGE"): ("valid", 500, 12_500),
+            _vsig_did("ENGINE_LOAD"): ("valid", 90, 102),
+            _vsig_did("FUEL_LEVEL"): ("negativeResponse", 65_535, VSIG_NRC_OUT_OF_RANGE),
+            VSIG_UNKNOWN_DID: ("valid", 70, 77),
+        },
+    ),
+    (
+        14,
+        9_500,
+        {
+            _vsig_did("ENGINE_SPEED"): ("valid", 30, 12_400),
+            _vsig_did("VEHICLE_SPEED"): ("valid", 50, 42),
+            _vsig_did("THROTTLE_POS"): ("skipped", 65_535, 0),
+            _vsig_did("COOLANT_TEMP"): ("valid", 700, 125),
+        },
+    ),
+    (
+        15,
+        9_600,
+        {
+            _vsig_did("BATTERY_VOLTAGE"): ("valid", 300, 12_480),
+            _vsig_did("ENGINE_LOAD"): ("valid", 100, 128),
+            _vsig_did("FUEL_LEVEL"): ("negativeResponse", 65_535, VSIG_NRC_OUT_OF_RANGE),
+            VSIG_UNKNOWN_DID: ("valid", 80, 78),
+        },
+    ),
+]
+
+
+def vsig_row_cells(
+    rx_utc: str,
+    rx_mono_ms: int,
+    seq: int,
+    lost: int,
+    first_record: int,
+    did: int,
+    state: str,
+    age_ms: int,
+    raw: int,
+    first_in_block: bool,
+) -> list[str]:
+    """One signals.csv row; `signal` / `value` as the app writes them (catalog decode)."""
+    name = vehicle_catalog.BY_DID.get(did)
+    value = ""
+    if name and VSIG_STATE[state] in (VSIG_STATE["valid"], VSIG_STATE["stale"]):
+        entry = vehicle_catalog.SIGNALS[name]
+        value = repr(vehicle_catalog.decode(name, raw.to_bytes(entry["length"], "big")))
+    return [
+        rx_utc,
+        str(rx_mono_ms),
+        str(seq),
+        str(lost if first_in_block else 0),
+        str(rx_mono_ms),
+        str(len(VSIG_TABLE)),
+        str(first_record),
+        str(did),
+        str(VSIG_STATE[state]),
+        str(age_ms),
+        str(raw),
+        name or "",
+        value,
+    ]
+
+
+def make_v4_vsig_fixture() -> None:
+    out_dir = FIXTURES_DIR / "v4_vsig_session"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    src_dir = FIXTURES_DIR / "v4_session"
+    (out_dir / "telemetry.csv").write_text((src_dir / "telemetry.csv").read_text())
+
+    rows = []
+    gap_events = []
+    prev_seq = None
+    for i, (seq, rx_mono_ms, records) in enumerate(V4_VSIG_BLOCKS):
+        lost = 0 if prev_seq is None else (seq - prev_seq - 1) % 256
+        prev_seq = seq
+        rx_utc = f"2026-01-15T16:00:{i + 1:02d}.000Z"
+        if lost:
+            gap_events.append([rx_utc, str(rx_mono_ms), "vsig_gap", f"missing={lost};seq={seq}"])
+        first_record = VSIG_TABLE.index(next(iter(records)))
+        for j, (did, (state, age_ms, raw)) in enumerate(records.items()):
+            rows.append(
+                vsig_row_cells(
+                    rx_utc, rx_mono_ms, seq, lost, first_record, did, state, age_ms, raw, j == 0
+                )
+            )
+    write_csv(out_dir / "signals.csv", SIGNALS_HEADER, rows)
+
+    write_csv(
+        out_dir / "events.csv",
+        ["rx_utc_iso", "rx_mono_ms", "event", "detail"],
+        [
+            ["2026-01-15T16:00:00.000Z", "9000", "recording_started", ""],
+            ["2026-01-15T16:00:00.000Z", "9000", "packet_version", "version=3"],
+            ["2026-01-15T16:00:01.000Z", "9100", "packet_version", "version=4"],
+            *gap_events,
+            ["2026-01-15T16:00:07.000Z", "9700", "recording_stopped", ""],
+        ],
+    )
+
+    meta = json.loads((src_dir / "meta.json").read_text())
+    meta.update(
+        {
+            "session_id": V4_VSIG_SESSION_ID,
+            "created_utc": "2026-01-15T16:00:00.000Z",
+            "note": "v4 + vehicle signals fixture: D-066 item 4 blocks, synthetic values",
+            "app_version": "2.3.0",
+            "vehicle_signal_block_version": VSIG["version"],
+        }
+    )
+    (out_dir / "meta.json").write_text(json.dumps(meta, indent=2) + "\n")
+
+    summary = json.loads((src_dir / "summary.json").read_text())
+    summary.update(
+        {
+            "first_packet_utc": "2026-01-15T16:00:00.000Z",
+            "last_packet_utc": "2026-01-15T16:00:06.000Z",
+            "vehicle_signal_block_count": len(V4_VSIG_BLOCKS),
+            "vehicle_signal_record_count": len(rows),
+            "vehicle_signal_lost_blocks": 2,
+            "vehicle_signal_lost_percent": round(2 / (len(V4_VSIG_BLOCKS) + 2) * 100, 4),
+        }
+    )
+    (out_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+
+
 def main() -> None:
     make_v2_fixture()
     make_v3_fixture()
     make_v4_fixture()
     make_v4_gps_fixture()
+    make_v4_vsig_fixture()
     print(f"Wrote fixtures to {FIXTURES_DIR}")
 
 
