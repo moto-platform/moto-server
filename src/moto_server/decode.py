@@ -158,11 +158,16 @@ _SIGNALS_WIRE_FIELDS = {
 }
 
 
-# States whose raw is the DID's data bytes (schema vehicleSignalBlock.rawRule), by name
-# from the generated state table, never as literal numbers.
-_VALUE_STATES = frozenset(
-    value for value, name in defs_ble.VSIG_STATES.items() if name in ("valid", "stale")
-)
+def vsig_state(name: str) -> int:
+    """Wire value of a vehicle-signal record state, by its schema name (never a literal)."""
+    return next(value for value, state in defs_ble.VSIG_STATES.items() if state == name)
+
+
+VSIG_VALID = vsig_state("valid")
+VSIG_STALE = vsig_state("stale")
+VSIG_NEGATIVE_RESPONSE = vsig_state("negativeResponse")
+# States whose raw is the DID's data bytes (schema vehicleSignalBlock.rawRule).
+_VALUE_STATES = frozenset((VSIG_VALID, VSIG_STALE))
 
 
 class ContractError(ValueError):

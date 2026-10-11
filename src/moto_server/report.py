@@ -13,6 +13,8 @@ from typing import Any
 
 from moto_server import ble_schema, signals
 from moto_server.decode import (
+    VSIG_NEGATIVE_RESPONSE,
+    VSIG_VALID,
     decode_gps_csv,
     decode_imu_csv,
     decode_signals_csv,
@@ -140,8 +142,8 @@ def _gps_summary(gps_csv: Path, schema: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-_VSIG_VALID = 1
-_VSIG_NEGATIVE_RESPONSE = 4
+_VSIG_VALID = VSIG_VALID
+_VSIG_NEGATIVE_RESPONSE = VSIG_NEGATIVE_RESPONSE
 
 
 def _vehicle_signals_summary(

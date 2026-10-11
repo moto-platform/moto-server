@@ -27,6 +27,8 @@ from moto_server.decode import (
     GPS_RAW_COLUMNS,
     GPS_SCALED_COLUMNS,
     V4_EXTRA_HEADER,
+    VSIG_STALE,
+    VSIG_VALID,
     DecodedTelemetryRow,
     csv_column_for_field,
     decode_gps_csv,
@@ -140,8 +142,8 @@ def build_gps_table(session_id: str, csv_path: Path, schema: dict[str, Any]) -> 
 
 
 _UINT32_MAX = 2**32
-_VSIG_VALID = 1
-_VSIG_STALE = 2
+_VSIG_VALID = VSIG_VALID
+_VSIG_STALE = VSIG_STALE
 
 
 def build_signals_table(session_id: str, csv_path: Path, schema: dict[str, Any]) -> pa.Table:
