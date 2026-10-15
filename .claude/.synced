@@ -4,3 +4,5 @@
 .claude/agents/safety-reviewer.md
 .claude/agents/vss-schema-guardian.md
 .claude/skills/repo-bootstrap/SKILL.md
+AGENTS.md
+GEMINI.md
