@@ -336,6 +336,11 @@ moto-rt-core host tests:
 uv run moto-server golden --out <moto-rt-core>/tests/host/vectors   # also python -m moto_server.derived.golden
 ```
 
+- Defs version: the headers record the defs version they were generated from (v0.14.0 now).
+  The expected outputs use that version's derived `stale_after_ms` (the age limit of a
+  signal's DID inputs), which changed in v0.14.0, so rt-core's derived-module test needs a
+  defs pin with the same derived table (v0.14.0 or later); against v0.13.0 the torque and
+  power rows would differ. The indices are the same in v0.13.0.
 - Location in rt-core: `tests/host/vectors/` (`derived_vectors.h` types + one
   `derived_<scenario>.h` per scenario). The headers are committed there; rt-core never
   depends on this repo, the host tests read no files and parse no strings. The headers use
