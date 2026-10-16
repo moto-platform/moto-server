@@ -173,7 +173,8 @@ def test_other_classes_events_and_unimplemented_signals_are_not_implemented():
         "reason": "class B",
     }
     assert coverage["ride_distance"]["status"] == engine.NOT_IMPLEMENTED
-    assert coverage["stop_event"]["reason"] == "event"
+    assert coverage["shift_event"]["reason"] == "event"
+    assert coverage["stop_event"]["status"] == engine.MISSING_INPUTS  # events are computed now
     assert coverage["clutch_state"]["reason"] == "no formula"
     assert set(coverage) == set(vehicle_derived.SIGNALS)
 
@@ -268,3 +269,37 @@ def test_provisional_constants_are_reported():
     }
     entry = engine.evaluate(FakeInputs(inputs)).coverage["gearbox_ratio_measured"]
     assert entry["provisional_constants"] == ["rear_wheel_radius_dynamic_m"]
+
+
+# --- event formulas ----------------------------------------------------------------
+
+
+def test_an_event_formula_has_no_grid_and_its_rows_are_the_event_times():
+    specs = {
+        "e": _spec(["did.VEHICLE_SPEED"], range=[0.0, 5.0], period_ms=None, stale_after_ms=None)
+    }
+    specs["e"]["event"] = True
+    formulas = {"e": Formula("event", lambda env: [(100, 3.0, None), (700, 7.0, None)])}
+    result = engine.evaluate(
+        FakeInputs({"did.VEHICLE_SPEED": const_series(0, 1000, 100, 1.0)}), specs, formulas, {}
+    )
+    out = _by_name(result)["e"]
+    assert out.times == [100, 700]
+    assert out.values == [3.0, None] and out.flags == [None, "out_of_range"]
+    entry = result.coverage["e"]
+    assert entry["status"] == engine.COMPUTED and entry["rows"] == 2 and entry["valid_rows"] == 1
+    assert "period_ms" not in entry and entry["flag_counts"] == {"out_of_range": 1}
+
+
+def test_an_event_with_no_formula_is_not_implemented_with_reason_event():
+    specs = {"e": _spec(["did.X"], event=True)}
+    result = engine.evaluate(FakeInputs({}), specs, {}, {})
+    assert result.coverage["e"]["reason"] == "event"
+
+
+def test_the_event_signals_other_than_stop_event_stay_not_implemented():
+    coverage = engine.evaluate(FakeInputs({})).coverage
+    events = {n for n, s in vehicle_derived.SIGNALS.items() if s.get("event")}
+    assert "stop_event" in events
+    for name in events - {"stop_event"}:
+        assert coverage[name]["status"] in (engine.NOT_IMPLEMENTED, engine.NOT_READY), name

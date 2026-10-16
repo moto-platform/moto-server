@@ -15,7 +15,7 @@ organization; see `moto-vehicle-defs/docs/ARCHITECTURE.md` for the platform pict
 ## Setup
 
 ```bash
-git submodule update --init --recursive   # external/moto-vehicle-defs, pinned to v0.13.0
+git submodule update --init --recursive   # external/moto-vehicle-defs, pinned to v0.14.0
 uv sync                                    # installs runtime + dev dependencies
 ```
 
@@ -219,8 +219,10 @@ C across rides, D server only). Until rt-core exists the Python reference in
   defs `range` null with `out_of_range`. `window_ms` is the least-squares slope window
   (`vehicle_accel`, `vehicle_jerk`) or the moving-average window (`yaw_rate`,
   `accel_imu_residual`).
-- `formulas.py`: the first batch of 19 class-A signals, from vehicle-data-catalog section 5
-  (and each signal's defs description). Assumptions: the ECU speed is km/h and integer; the
+- `formulas.py`: 34 class-A signals, from vehicle-data-catalog section 5 (and each signal's
+  defs description): part 1 (19, below) and part 2 (fuel economy, trims and throttle/pedal
+  residuals, `altitude_change`, `road_grade`, `coolant_rate`, `oil_temp_rate`,
+  `lean_crosscheck_residual`, `stop_event`). Assumptions: the ECU speed is km/h and integer; the
   IMU z axis is the yaw axis and x the longitudinal axis (no mounting or lean correction,
   gravity not removed from `accel_imu_residual`); `trip_distance`, `trip_time` and `idle_time`
   integrate from the first common sample and hold a sample for at most its stale limit, so a
@@ -231,8 +233,20 @@ C across rides, D server only). Until rt-core exists the Python reference in
   form rather than the full standard; `air_fuel_ratio` and `fuel_rate_maf` use the commanded
   lambda and `stoichiometric_afr` / `fuel_density_kg_per_l`. Provisional vehicle constants
   used are listed in the report block.
-- Not computed: events (`stop_event`, `shift_event`, ...: the catalog gives no rule), the
-  other class-A signals, and class B/C/D (`not_implemented`); signals with `ready_phase0:
+- Part 2 assumptions: `fuel_per_stroke` is one injection per two revolutions;
+  `altitude_change` is the hypsometric equation against the first valid barometric sample of
+  the session (g0 = 9.80665); `road_grade` uses the first and last samples of altitude and
+  trip distance in the window (`sensor.imu_accel_x` is declared as context only, unused);
+  `lean_crosscheck_residual` takes both signs as positive = right (to be confirmed on the
+  bike) and needs `lean_angle`, which this server does not store (`missing_inputs`).
+  New flags: `no_consumption`, `no_power`, `engine_off`.
+- Event kind: a formula of kind `event` has no grid; its rows sit at the event times and its
+  coverage entry has no `period_ms`. Only `stop_event` exists: a stop starts at the first speed
+  0 with RPM above 0 and ends at the first later speed above 0 (value = seconds, row time =
+  the end); a gap in the speed samples above 3 poll periods (D-025) or a stop still open at
+  the end gives no event. The range check applies to events too.
+- Not computed (`not_implemented`): the other events, the other class-A signals without a
+  formula (missing thresholds or constants), and class B/C/D; signals with `ready_phase0:
   false` or `pending_inputs` (`not_ready`, never evaluated).
 
 `parquet/derived.parquet` is long format: `session_id` (every row),
