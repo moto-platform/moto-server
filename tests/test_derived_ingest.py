@@ -188,6 +188,122 @@ def test_identical_reupload_returns_the_stored_derived_block(
     assert again.created is False and again.report["derived"] == first.report["derived"]
 
 
+# --- class-B ride summaries -------------------------------------------------------------------
+
+
+def _summary_table(settings: Settings, session_id: str):
+    path = settings.sessions_dir / session_id / "parquet" / "derived_summary.parquet"
+    return pq.read_table(path)
+
+
+def test_ingest_writes_the_ride_summary_parquet_and_report_block(
+    settings: Settings, imu_vsig_session: Path
+):
+    result = ingest_path(imu_vsig_session, settings)
+    table = _summary_table(settings, result.session_id)
+
+    assert table.schema.names == [
+        "session_id",
+        "record",
+        "did",
+        "signal",
+        "cell",
+        "bin0_low",
+        "bin0_high",
+        "bin1_low",
+        "bin1_high",
+        "value",
+        "unit",
+        "valid",
+        "flag",
+    ]
+    types = {f.name: str(f.type) for f in table.schema}
+    assert types["did"] == "int64" and types["cell"] == "int64"
+    assert types["value"] == "double" and types["bin1_high"] == "double"
+    assert types["valid"] == "bool" and types["record"] == "string"
+    assert set(table["session_id"].to_pylist()) == {result.session_id}
+
+    rows = table.to_pylist()
+    scalar = next(r for r in rows if r["signal"] == "ride_stop_count")
+    assert scalar["record"] == "RIDE_USAGE"
+    assert scalar["did"] == vehicle_derived.RIDE_SUMMARY_RECORDS["RIDE_USAGE"][0]
+    assert scalar["cell"] is None and scalar["bin0_low"] is None and scalar["bin1_high"] is None
+    assert scalar["value"] == 0.0 and scalar["valid"] is True and scalar["unit"] == "count"
+    cells = [r for r in rows if r["signal"] == "operating_point_time"]
+    assert [r["cell"] for r in cells] == list(range(256))
+    assert cells[24]["bin0_low"] == 750.0 and cells[24]["bin1_high"] == 56.25
+    assert sum(r["value"] for r in cells) == pytest.approx(0.31)
+    one_axis = [r for r in rows if r["signal"] == "ride_coolant_time_at_temp"]
+    assert len(one_axis) == 10 and one_axis[0]["bin1_low"] is None
+    assert {r["signal"] for r in rows}.isdisjoint({"ride_warmup_time", "ride_fuel_used"})
+
+    block = result.report["derived_summary"]
+    assert block["defs_version"] == result.report["defs_version"]
+    assert block["ride_definition"] == "session"
+    class_b = [n for n, spec in vehicle_derived.SIGNALS.items() if spec["class"] == "B"]
+    assert sum(block["summary"].values()) == len(class_b)
+    assert set(block["records"]) == set(vehicle_derived.RIDE_SUMMARY_RECORDS)
+    usage = block["records"]["RIDE_USAGE"]
+    assert usage["did"] == vehicle_derived.RIDE_SUMMARY_RECORDS["RIDE_USAGE"][0]
+    assert usage["signals"]["ride_stop_count"] == {
+        "status": "computed",
+        "value": 0.0,
+        "unit": "count",
+        "flag": None,
+    }
+    binned = block["records"]["RIDE_OPERATING_POINTS"]["signals"]["operating_point_time"]
+    assert binned["cells"] == 256 and binned["nonzero_cells"] == 1
+    assert binned["total_s"] == pytest.approx(0.31) and binned["outside_s"] == 0.0
+    assert "value" not in binned and "values" not in binned
+    thermal = block["records"]["RIDE_THERMAL"]["signals"]
+    assert thermal["ride_warmup_time"] == {
+        "status": "not_implemented",
+        "reason": "threshold: operating coolant temperature",
+    }
+    assert thermal["ride_oil_time_at_temp"]["status"] == "missing_inputs"
+    assert "did.ENGINE_OIL_TEMP" in thermal["ride_oil_time_at_temp"]["missing"]
+    assert block["records"]["RIDE_FUELING"]["signals"]["fuel_trim_map"]["status"] == "not_ready"
+
+    on_disk = json.loads((settings.sessions_dir / result.session_id / "report.json").read_text())
+    assert on_disk["derived_summary"] == block
+    assert "ride summaries: one session = one ride (" in render_text(result.report)
+
+
+def test_a_session_without_summary_rows_has_no_summary_parquet(
+    settings: Settings, imu_vsig_session: Path
+):
+    result = ingest_path(imu_vsig_session, settings)
+    session_dir = settings.sessions_dir / result.session_id
+    path = session_dir / "parquet" / "derived_summary.parquet"
+    assert path.is_file()
+    for name in ("signals", "telemetry", "imu"):  # nothing left to summarize
+        (session_dir / "parquet" / f"{name}.parquet").unlink(missing_ok=True)
+    block, has_rows = derived.store_summary(session_dir, result.session_id)
+    assert has_rows is False and not path.exists()
+    assert "error" not in block and "computed" not in block["summary"]
+
+
+def test_ingest_survives_a_summary_failure(
+    settings: Settings, imu_vsig_session: Path, monkeypatch: pytest.MonkeyPatch
+):
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(derived, "summarize_session", boom)
+    result = ingest_path(imu_vsig_session, settings)
+
+    assert result.created is True and result.report["derived_summary"] == {
+        "error": "RuntimeError: boom"
+    }
+    assert "ride summaries: error: RuntimeError: boom" in render_text(result.report)
+    session_dir = settings.sessions_dir / result.session_id
+    assert not (session_dir / "parquet" / "derived_summary.parquet").exists()
+    assert (session_dir / "parquet" / "derived.parquet").is_file()  # class A unaffected
+    on_disk = json.loads((session_dir / "report.json").read_text())
+    assert on_disk["derived_summary"] == {"error": "RuntimeError: boom"}
+    assert "error" not in result.report["derived"]
+
+
 # --- index migration ------------------------------------------------------------------------
 
 
@@ -241,6 +357,9 @@ def test_cli_derive_recomputes_one_session_and_all(
     assert _run(monkeypatch, tmp_path, ["derive", session_id]) == 0
     out = capsys.readouterr().out
     assert session_id in out and "computed" in out
+    assert f"{session_id}  derived summary  " in out
+    assert (session_dir / "parquet" / "derived_summary.parquet").is_file()
+    assert json.loads((session_dir / "report.json").read_text())["derived_summary"]["records"]
     assert (session_dir / "parquet" / "derived.parquet").is_file()
     assert index.get_session(db, session_id).has_derived is True
     assert json.loads((session_dir / "report.json").read_text())["derived"]["signals"]

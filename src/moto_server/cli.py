@@ -82,7 +82,7 @@ def _cmd_derive(args: argparse.Namespace) -> int:
     exit_code = EXIT_OK_OR_WARN
     for session_id in session_ids:
         try:
-            block = rederive_session(settings, session_id)
+            block, summary_block = rederive_session(settings, session_id)
         except FileNotFoundError:
             print(f"error: unknown session: {session_id}", file=sys.stderr)
             exit_code = EXIT_FAIL_OR_ERROR
@@ -91,8 +91,16 @@ def _cmd_derive(args: argparse.Namespace) -> int:
             print(f"{session_id}  derived error: {block['error']}", file=sys.stderr)
             exit_code = EXIT_FAIL_OR_ERROR
             continue
+        if "error" in summary_block:
+            print(f"{session_id}  derived summary error: {summary_block['error']}", file=sys.stderr)
+            exit_code = EXIT_FAIL_OR_ERROR
         summary = ", ".join(f"{n} {status}" for status, n in sorted(block["summary"].items()))
         print(f"{session_id}  derived rows={block['rows']} valid={block['valid_rows']}  {summary}")
+        if "error" not in summary_block:
+            counts = ", ".join(
+                f"{n} {status}" for status, n in sorted(summary_block["summary"].items())
+            )
+            print(f"{session_id}  derived summary  {counts}")
     return exit_code
 
 

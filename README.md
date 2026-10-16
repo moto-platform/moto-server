@@ -42,7 +42,7 @@ uv run moto-server import <folder-or-zip>      # ingest a session, print its rep
 uv run moto-server report <session_id>         # re-print a stored session's report
 uv run moto-server report <session_id> --format json
 uv run moto-server list                        # one line per ingested session
-uv run moto-server derive <session_id>         # recompute the derived signals of a stored session
+uv run moto-server derive <session_id>         # recompute the derived signals and ride summaries of a stored session
 uv run moto-server derive --all                # ... of every stored session
 uv run moto-server serve [--host] [--port] [--reload]
 ```
@@ -77,7 +77,8 @@ $MOTO_DATA_DIR/
     parquet/gps.parquet            # decoded GPS blocks (if gps.csv was present)
     parquet/signals.parquet        # vehicle-signal records (if signals.csv was present)
     parquet/derived.parquet        # derived signals, long format (if any could be computed)
-    report.json                    # validation report (see below), incl. the `derived` block
+    parquet/derived_summary.parquet  # class-B ride summaries, long format (if any)
+    report.json                    # validation report (see below), incl. the `derived` and `derived_summary` blocks
 ```
 
 Parquet column names follow `<defs signal>_<unit>` (e.g. `engine_speed_rpm`,
@@ -258,6 +259,65 @@ used, `summary` (count per status), `rows` / `valid_rows` and, per signal of the
 `error` (`message`). It is computed during ingest after the parquet step; an exception is
 recorded as `derived: {"error": ...}`, leaves the ingest status unchanged and writes no
 `derived.parquet`. `moto-server derive` recomputes it after a defs bump or a formula change.
+
+### Ride summaries (class B, part 3)
+
+`src/moto_server/derived/summary.py` evaluates the class-B signals after the class-A pass.
+Phase 0 has no ride segmentation: **one stored session is one ride** (the report says
+`ride_definition: "session"`). A summary reads the valid rows of its class-A inputs, the scalar
+results of its class-B inputs (`ride_fuel_consumption` follows `ride_fuel_used` and
+`ride_distance`, dependency order) and the raw `did.*` / `sensor.*` series. Time integrals and
+time-in-cell use the class-A hold rule (`formulas.hold_segments`): a value is held between
+samples but never beyond the input's freshness (`did.*` of a class-B signal: 3 poll periods,
+D-025; sensors: `SENSORS` `stale_after_ms`), so a gap adds nothing. A value outside the defs
+`range` is null with `out_of_range` (each cell too); statuses are the class-A ones.
+
+- Implemented (19 of the 46 class-B signals): `ride_distance`, `ride_time`, `ride_idle_time`
+  (last valid `trip_distance` / `trip_time` / `idle_time`), `ride_stop_count` (valid
+  `stop_event` rows), `ride_fuel_used` (integral of the fuel rate, L), `ride_fuel_consumption`
+  (`ride_fuel_used / ride_distance * 100`; distance <= 0 is `standstill`), `ride_ltft_mean`,
+  `ride_stft_std` (population standard deviation, `insufficient_samples` below 2),
+  `operating_point_time` ((ENGINE_SPEED, ENGINE_LOAD) cells), `ride_coolant_time_at_temp`,
+  `ride_oil_time_at_temp`, `ride_coolant_rate_max`, `ride_start_coolant_temp`,
+  `ride_end_coolant_temp`, `ride_start_intake_temp`, `ride_distance_gps` (integral of the GNSS
+  ground speed, km; speed only, never a position), `ride_bus_off_count`, `ride_tester_rtt_max`,
+  `ride_tester_step_gap_max`.
+- Bins: uniform `[min, max)` per axis from the defs `bins`; the cell index is row-major with
+  the first `bins` entry as the major axis (`cell = bin0 * count1 + bin1`). The time of a held
+  value goes to its cell; a held value outside an axis range is in no cell and counted in the
+  report's `outside_s`.
+- `ride_bus_off_count` sums the increments of the cumulative counter between consecutive
+  samples (the first sample is the baseline); a decrease means the node restarted and the new
+  value is the increment. The server does not store this sensor yet (telemetry.parquet keeps
+  only the tester columns), so it is `missing_inputs` on real sessions until it does.
+  `ride_distance_gps` also needs `sensor.gps_fix_type` (declared input) next to the speed.
+- `not_implemented` with a `reason`: `ride_warmup_time` (threshold: operating coolant
+  temperature), `ride_thermal_cycle_count` (threshold: cold/hot coolant temperatures),
+  `ride_fan_on_temperature` (threshold: fan voltage step), `throttle_torque_lag` (definition:
+  throttle step and lag search range), `ride_final_drive_ratio` (threshold: steady cruise),
+  `speedometer_error` and `effective_tyre_radius` (threshold: steady speed and GNSS accuracy),
+  `ride_aggressiveness_score` and `ride_cornering_aggressiveness` (definition: score weights),
+  `ride_can_error_count` (definition: TEC/REC are levels, not error counts),
+  `ride_unanswered_did_count` (definition: sensor and BLE field differ),
+  `ride_tester_nrc78_count` (definition: BLE rttNrc78Count belongs to the rotating rttDid
+  record) and the signals whose class-A input the reference does not compute
+  (`input not implemented: derived.<name>`): `ride_heat_soak_max`, `ride_cranking_dip`,
+  `ride_rest_voltage`, `ride_cold_abuse_time`, `ride_over_rev_time`, `ride_lugging_time`,
+  `ride_idle_rpm_std`, `ride_idle_rpm_drift`, `ride_shift_count`, `ride_launch_count`,
+  `coast_down_cda`, `coast_down_rolling_resistance`. `ready_phase0: false` / `pending_inputs`
+  signals are `not_ready`; absent inputs are `missing_inputs` (with the list).
+
+`parquet/derived_summary.parquet` is long format, one row per scalar or per cell: `session_id`,
+`record` (e.g. `RIDE_USAGE`), `did` (int64, from `RIDE_SUMMARY_RECORDS`), `signal`, `cell`
+(int64, null for scalars), `bin0_low`, `bin0_high`, `bin1_low`, `bin1_high` (float64, null when
+absent), `value` (float64, null when invalid), `unit`, `valid`, `flag`. The report's
+`derived_summary` block: `{defs_version, ride_definition, summary: {status: count}, records:
+{RECORD_NAME: {did, signals: {name: entry}}}}`; a scalar entry has `status` / `value` / `unit` /
+`flag`, a binned one `status` / `unit` / `cells` / `nonzero_cells` / `total_s` / `outside_s`
+(no per-cell values), the others `reason` / `missing` / `message`. It is computed right after
+the class-A step; an exception is recorded as `derived_summary: {"error": ...}`, writes no file
+and never fails the ingest. The file is removed when there is no row. `moto-server derive`
+recomputes both files and prints one more line per session. There is no index column.
 
 ## Development
 
