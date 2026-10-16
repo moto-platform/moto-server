@@ -291,6 +291,12 @@ D-025; sensors: `SENSORS` `stale_after_ms`), so a gap adds nothing. A value outs
   value is the increment. The server does not store this sensor yet (telemetry.parquet keeps
   only the tester columns), so it is `missing_inputs` on real sessions until it does.
   `ride_distance_gps` also needs `sensor.gps_fix_type` (declared input) next to the speed.
+- Choices the defs leave open (assumptions of this reference): `ride_bus_off_count` counts
+  only bus-offs seen within the session and treats a decrease as a restart; `ride_ltft_mean` is
+  a sample mean and `ride_stft_std` a population standard deviation (each DID has a fixed poll
+  period, so a sample mean is a time average). A session that contains a key-off and key-on is
+  still one "ride" here, so its class-B values mix both; `ride_stop_count` ignores a stop
+  still open at the end of the data (the class-A `stop_event` rule).
 - `not_implemented` with a `reason`: `ride_warmup_time` (threshold: operating coolant
   temperature), `ride_thermal_cycle_count` (threshold: cold/hot coolant temperatures),
   `ride_fan_on_temperature` (threshold: fan voltage step), `throttle_torque_lag` (definition:
