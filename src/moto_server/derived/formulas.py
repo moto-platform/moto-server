@@ -360,7 +360,9 @@ def air_density(at: At) -> float:
 @_point("power_correction_factor")
 def power_correction_factor(at: At) -> float:
     """Density-ratio form of the SAE J1349 correction: rho_ref / rho, with rho_ref the dry-air
-    density at the J1349 reference conditions (99 kPa, 25 degC)."""
+    density at the J1349 reference conditions (99 kPa, 25 degC). A "J1349-style"
+    approximation (catalog): humidity is ignored and the barometric reading (total pressure)
+    stands in for the dry-air pressure."""
     reference = air_density_kg_m3(J1349_REFERENCE_PRESSURE_KPA, J1349_REFERENCE_TEMPERATURE_C)
     return reference / at.value(_DENSITY)
 

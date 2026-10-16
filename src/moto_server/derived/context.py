@@ -22,7 +22,8 @@ FLAG_OUT_OF_RANGE = "out_of_range"
 
 # D-025: a DID is considered gone after this many of its own poll periods without a sample.
 # Stands in for the DID table's stale_after_ms, which moto_defs' Python modules do not
-# export; used only where a signal has no stale_after_ms of its own (events).
+# export; used only where a signal has no stale_after_ms of its own (events). It can be a
+# little wider than the table value (VEHICLE_SPEED keeps 300 ms, D-048, vs 3 x 110 ms).
 DID_AGE_LIMIT_POLLS = 3
 
 
