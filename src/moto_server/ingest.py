@@ -6,7 +6,9 @@ Storage layout under $MOTO_DATA_DIR/sessions/<session_id>/:
                if present)
     parquet/   telemetry.parquet (and imu.parquet / gps.parquet / signals.parquet)
     derived.parquet   derived signals (D-070 item 2), when at least one could be computed
-    report.json       (with a `derived` block: per-signal status, row/valid counts)
+    derived_summary.parquet   class-B per-ride summaries (one session = one ride), if any
+    report.json       (with a `derived` block: per-signal status, row/valid counts, and a
+                      `derived_summary` block: per-record summary entries)
 """
 
 from __future__ import annotations
@@ -181,6 +183,8 @@ def ingest_path(
         # Derived signals never fail an ingest: an exception is recorded as derived.error.
         derived_block, has_derived = derived.store(session_dir, session_id)
         report_dict["derived"] = derived_block
+        # Same for the class-B per-ride summaries: derived_summary.error, never a failed ingest.
+        report_dict["derived_summary"], _ = derived.store_summary(session_dir, session_id)
         (session_dir / "report.json").write_text(json.dumps(report_dict, indent=2) + "\n")
 
         index.upsert_session(
@@ -208,18 +212,20 @@ def ingest_path(
         )
 
 
-def rederive_session(settings: Settings, session_id: str) -> dict[str, Any]:
-    """Recomputes derived.parquet of a stored session from its parquet files, rewrites the
-    `derived` block of report.json and the index flag. Returns the block.
-    Raises FileNotFoundError for an unknown session."""
+def rederive_session(settings: Settings, session_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Recomputes derived.parquet and derived_summary.parquet of a stored session, rewrites the
+    `derived` and `derived_summary` blocks of report.json and the index flag. Returns both
+    blocks. Raises FileNotFoundError for an unknown session."""
     session_dir = settings.sessions_dir / session_id
     report_path = session_dir / "report.json"
     if not report_path.is_file():
         raise FileNotFoundError(f"unknown session: {session_id}")
 
     block, has_derived = derived.store(session_dir, session_id)
+    summary_block, _ = derived.store_summary(session_dir, session_id)
     report_dict = json.loads(report_path.read_text())
     report_dict["derived"] = block
+    report_dict["derived_summary"] = summary_block
     report_path.write_text(json.dumps(report_dict, indent=2) + "\n")
     index.set_has_derived(settings.index_db_path, session_id, has_derived)
-    return block
+    return block, summary_block

@@ -637,4 +637,11 @@ def render_text(report: dict[str, Any]) -> str:
             f"({summary})"
         )
 
+    ride = report.get("derived_summary")
+    if ride and "error" in ride:
+        lines.append(f"  ride summaries: error: {ride['error']}")
+    elif ride:
+        counts = ", ".join(f"{n} {status}" for status, n in sorted(ride["summary"].items()))
+        lines.append(f"  ride summaries: one {ride['ride_definition']} = one ride ({counts})")
+
     return "\n".join(lines) + "\n"

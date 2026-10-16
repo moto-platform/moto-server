@@ -5,6 +5,12 @@ returns the long-format table plus the coverage block; store() writes
 <session_dir>/derived.parquet (session_id, device_time_ms, signal, value, unit, valid,
 flag) and returns the `derived` block of report.json. Only class A signals with a formula in
 formulas.py are computed; every other signal is listed in the coverage with its status.
+
+store_summary() does the same for the class-B per-ride summaries (summary.py): it writes
+<session_dir>/parquet/derived_summary.parquet (long format, one row per scalar or per cell:
+session_id, record, did, signal, cell, bin0_low, bin0_high, bin1_low, bin1_high, value, unit,
+valid, flag) and returns the `derived_summary` block of report.json. In Phase 0 one stored
+session is one ride.
 """
 
 from __future__ import annotations
@@ -16,17 +22,37 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from moto_server.defs import defs_version
-from moto_server.derived import engine
+from moto_server.defs import defs_version, vehicle_derived
+from moto_server.derived import engine, summary
 from moto_server.derived.inputs import SessionInputs
 
 DERIVED_FILE = "parquet/derived.parquet"
+SUMMARY_FILE = "parquet/derived_summary.parquet"
+RIDE_DEFINITION = "session"  # Phase 0: no ride segmentation, one session = one ride
 
 TABLE_SCHEMA = pa.schema(
     [
         ("session_id", pa.string()),
         ("device_time_ms", pa.int64()),
         ("signal", pa.string()),
+        ("value", pa.float64()),
+        ("unit", pa.string()),
+        ("valid", pa.bool_()),
+        ("flag", pa.string()),
+    ]
+)
+
+SUMMARY_SCHEMA = pa.schema(
+    [
+        ("session_id", pa.string()),
+        ("record", pa.string()),
+        ("did", pa.int64()),
+        ("signal", pa.string()),
+        ("cell", pa.int64()),
+        ("bin0_low", pa.float64()),
+        ("bin0_high", pa.float64()),
+        ("bin1_low", pa.float64()),
+        ("bin1_high", pa.float64()),
         ("value", pa.float64()),
         ("unit", pa.string()),
         ("valid", pa.bool_()),
@@ -95,6 +121,86 @@ def store(session_dir: Path, session_id: str) -> tuple[dict[str, Any], bool]:
     path = derived_path(session_dir)
     try:
         result = derive_session(session_dir, session_id)
+        if result.table.num_rows:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            pq.write_table(result.table, path)
+        else:
+            path.unlink(missing_ok=True)
+        return result.coverage, result.table.num_rows > 0
+    except Exception as exc:
+        path.unlink(missing_ok=True)
+        return {"error": f"{type(exc).__name__}: {exc}"}, False
+
+
+@dataclass
+class SummaryResult:
+    table: pa.Table
+    coverage: dict[str, Any]  # the `derived_summary` block of report.json
+
+
+def summary_path(session_dir: Path) -> Path:
+    return session_dir / SUMMARY_FILE
+
+
+def _summary_table(session_id: str, rows: list[summary.SummaryRow]) -> pa.Table:
+    records = vehicle_derived.RIDE_SUMMARY_RECORDS
+    specs = vehicle_derived.SIGNALS
+    edges: list[list[float | None]] = [[], [], [], []]
+    for row in rows:
+        for axis in range(2):
+            low, high = row.edges[axis] if axis < len(row.edges) else (None, None)
+            edges[2 * axis].append(low)
+            edges[2 * axis + 1].append(high)
+    names = [specs[row.signal]["record"] for row in rows]
+    return pa.table(
+        {
+            "session_id": pa.array([session_id] * len(rows), type=pa.string()),
+            "record": pa.array(names, type=pa.string()),
+            "did": pa.array([records[n][0] for n in names], type=pa.int64()),
+            "signal": pa.array([row.signal for row in rows], type=pa.string()),
+            "cell": pa.array([row.cell for row in rows], type=pa.int64()),
+            "bin0_low": pa.array(edges[0], type=pa.float64()),
+            "bin0_high": pa.array(edges[1], type=pa.float64()),
+            "bin1_low": pa.array(edges[2], type=pa.float64()),
+            "bin1_high": pa.array(edges[3], type=pa.float64()),
+            "value": pa.array([row.value for row in rows], type=pa.float64()),
+            "unit": pa.array([row.unit for row in rows], type=pa.string()),
+            "valid": pa.array([row.value is not None for row in rows], type=pa.bool_()),
+            "flag": pa.array([row.flag for row in rows], type=pa.string()),
+        },
+        schema=SUMMARY_SCHEMA,
+    )
+
+
+def summarize_session(session_dir: Path, session_id: str) -> SummaryResult:
+    """Evaluates the class-B summaries of the session stored under `session_dir` (the
+    class-A signals are evaluated first, in memory)."""
+    inputs = SessionInputs(session_dir)
+    evaluation = summary.evaluate(inputs, engine.evaluate(inputs))
+    statuses: dict[str, int] = {}
+    records: dict[str, dict[str, Any]] = {
+        name: {"did": did, "signals": {}}
+        for name, (did, _description) in vehicle_derived.RIDE_SUMMARY_RECORDS.items()
+    }
+    for name, entry in evaluation.coverage.items():
+        statuses[entry["status"]] = statuses.get(entry["status"], 0) + 1
+        records[vehicle_derived.SIGNALS[name]["record"]]["signals"][name] = entry
+    coverage = {
+        "defs_version": defs_version(),
+        "ride_definition": RIDE_DEFINITION,
+        "summary": statuses,
+        "records": records,
+    }
+    return SummaryResult(_summary_table(session_id, evaluation.rows), coverage)
+
+
+def store_summary(session_dir: Path, session_id: str) -> tuple[dict[str, Any], bool]:
+    """Writes parquet/derived_summary.parquet (removed when there is no row). Returns the
+    `derived_summary` report block and whether the file exists. Any exception becomes
+    {"error": ...} (and no file): summaries never fail an ingest."""
+    path = summary_path(session_dir)
+    try:
+        result = summarize_session(session_dir, session_id)
         if result.table.num_rows:
             path.parent.mkdir(parents=True, exist_ok=True)
             pq.write_table(result.table, path)

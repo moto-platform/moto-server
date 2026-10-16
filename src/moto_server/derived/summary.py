@@ -1,0 +1,523 @@
+"""Per-ride summaries of the class-B derived signals (D-070 item 2, part 3).
+
+Phase 0 has no ride segmentation: one stored session is one ride, so every summary covers
+the whole session. Names, units, ranges, records and bins come from
+moto_defs.vehicle_derived.SIGNALS (class "B"); this module only holds the arithmetic.
+
+Summaries are evaluated AFTER the class-A evaluation (engine.evaluate), in dependency order
+(ride_fuel_consumption reads ride_fuel_used and ride_distance). A summary function sees:
+    - the valid rows of the class-A outputs it declares as derived.* inputs,
+    - the scalar results of the class-B signals it declares as derived.* inputs,
+    - the raw series of its did.* / sensor.* inputs (same InputSource as engine.evaluate).
+It returns a scalar (value | None, flag | None) or, for a signal with defs `bins`, a Binned
+(one value per cell, row-major, the first bins entry is the major axis). Time integrals reuse
+formulas.hold_segments: a value is held between samples but never beyond the input's
+freshness, so a gap adds nothing. The freshness limit of a did.* input of a class-B signal
+(no stale_after_ms of its own) is context.did_age_limit_ms; sensors use SENSORS.
+Statuses are those of the engine; every value outside the defs `range` is null with the flag
+"out_of_range" (each cell too). Only declared inputs may be read (tests check this).
+"""
+
+from __future__ import annotations
+
+import math
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
+from typing import Any
+
+from moto_server.defs import vehicle_derived
+from moto_server.derived.context import (
+    FLAG_INSUFFICIENT_SAMPLES,
+    FLAG_INVALID_INPUT,
+    FLAG_OUT_OF_RANGE,
+    Env,
+    Feed,
+    InputInvalid,
+    did_age_limit_ms,
+)
+from moto_server.derived.engine import (
+    COMPUTED,
+    ERROR,
+    MISSING_INPUTS,
+    NOT_IMPLEMENTED,
+    NOT_READY,
+    Evaluation,
+    InputSource,
+    SignalOutput,
+    dependency_order,
+)
+from moto_server.derived.formulas import FLAG_STANDSTILL, Outcome, hold_segments
+
+# Unit conversions (not vehicle data).
+SECONDS_PER_HOUR = 3600.0
+M_PER_KM = 1000.0
+LITRES_PER_100KM_FACTOR = 100.0
+
+# --- input names (all of them declared by the defs; tests check this) -------------------
+_TRIP_DISTANCE = "derived.trip_distance"
+_TRIP_TIME = "derived.trip_time"
+_IDLE_TIME = "derived.idle_time"
+_STOP_EVENT = "derived.stop_event"
+_COOLANT_RATE = "derived.coolant_rate"
+_FUEL_USED = "derived.ride_fuel_used"
+_DISTANCE = "derived.ride_distance"
+_FUEL_RATE = "did.ENGINE_FUEL_RATE"
+_LTFT = "did.LONG_TERM_FUEL_TRIM_B1"
+_STFT = "did.SHORT_TERM_FUEL_TRIM_B1"
+_COOLANT = "did.COOLANT_TEMP"
+_INTAKE = "did.INTAKE_AIR_TEMP"
+_GPS_SPEED = "sensor.gps_ground_speed"
+_BUS_OFF = "sensor.can_bus_off_count"
+_RTT_MAX = "sensor.tester_rtt_max"
+_STEP_GAP_MAX = "sensor.tester_step_gap_max"
+
+
+@dataclass
+class Binned:
+    """Result of a binned summary: seconds (or values) per cell, row-major, and the seconds
+    held outside every cell."""
+
+    cells: list[Outcome]
+    outside_s: float = 0.0
+
+
+@dataclass(frozen=True)
+class Summary:
+    fn: Callable[[SummaryEnv], Outcome | Binned]
+
+
+SUMMARIES: dict[str, Summary] = {}
+
+
+def _summary(name: str) -> Callable[[Callable], Callable]:
+    def register(fn: Callable) -> Callable:
+        SUMMARIES[name] = Summary(fn)
+        return fn
+
+    return register
+
+
+def _input_not_implemented(name: str) -> str:
+    return f"input not implemented: derived.{name}"
+
+
+# Reason of every class-B signal that has no summary yet (the README lists them too).
+NOT_IMPLEMENTED_REASONS: dict[str, str] = {
+    "ride_warmup_time": "threshold: operating coolant temperature",
+    "ride_thermal_cycle_count": "threshold: cold/hot coolant temperatures",
+    "ride_fan_on_temperature": "threshold: fan voltage step",
+    "throttle_torque_lag": "definition: throttle step and lag search range",
+    "ride_final_drive_ratio": "threshold: steady cruise",
+    "speedometer_error": "threshold: steady speed and GNSS accuracy",
+    "effective_tyre_radius": "threshold: steady speed and GNSS accuracy",
+    "ride_aggressiveness_score": "definition: score weights",
+    "ride_cornering_aggressiveness": "definition: score weights",
+    "ride_can_error_count": "definition: TEC/REC are levels, not error counts",
+    "ride_unanswered_did_count": (
+        "definition: sensor (DIDs not answered) and BLE field (timed-out requests) differ"
+    ),
+    "ride_tester_nrc78_count": (
+        "definition: BLE rttNrc78Count belongs to the rotating rttDid record"
+    ),
+    "ride_heat_soak_max": _input_not_implemented("heat_soak_delta"),
+    "ride_cranking_dip": _input_not_implemented("cranking_dip"),
+    "ride_rest_voltage": _input_not_implemented("battery_rest_voltage"),
+    "ride_cold_abuse_time": _input_not_implemented("cold_engine_abuse"),
+    "ride_over_rev_time": _input_not_implemented("over_rev"),
+    "ride_lugging_time": _input_not_implemented("lugging"),
+    "ride_idle_rpm_std": _input_not_implemented("idle_rpm_std"),
+    "ride_idle_rpm_drift": _input_not_implemented("idle_rpm_drift"),
+    "ride_shift_count": _input_not_implemented("shift_event"),
+    "ride_launch_count": _input_not_implemented("launch_event"),
+    "coast_down_cda": _input_not_implemented("clutch_state"),
+    "coast_down_rolling_resistance": _input_not_implemented("clutch_state"),
+}
+
+
+class SummaryEnv(Env):
+    """The declared inputs of one class-B signal: did/sensor feeds, the valid rows of its
+    class-A inputs and the scalar results of its class-B inputs."""
+
+    def __init__(
+        self,
+        spec: Mapping[str, Any],
+        feeds: dict[str, Feed],
+        outputs: Mapping[str, SignalOutput],
+        results: Mapping[str, float | None],
+    ):
+        super().__init__(list(spec["inputs"]), feeds, spec.get("window_ms"))
+        self.bins: list[Mapping[str, Any]] = list(spec.get("bins") or [])
+        self._outputs = outputs
+        self._results = results
+
+    def _declared(self, name: str) -> str:
+        if name not in self.inputs:
+            raise KeyError(f"{name!r} is not a declared input (declared: {self.inputs})")
+        return name.removeprefix("derived.")
+
+    def valid(self, name: str) -> list[float]:
+        """Valid values (time order) of a declared class-A input."""
+        key = self._declared(name)
+        return [v for v in self._outputs[key].values if v is not None]
+
+    def result(self, name: str) -> float | None:
+        """Scalar result of a declared class-B input (None = invalid)."""
+        return self._results[self._declared(name)]
+
+    def samples(self, name: str) -> list[float]:
+        """All samples (time order) of a declared did.* / sensor.* input."""
+        return list(self.feed(name).values)  # type: ignore[arg-type]
+
+
+# --- helpers ------------------------------------------------------------------------------
+
+
+def _last_valid(env: SummaryEnv, name: str) -> Outcome:
+    values = env.valid(name)
+    if not values:
+        raise InputInvalid(FLAG_INVALID_INPUT)
+    return values[-1], None
+
+
+def _integral(env: SummaryEnv, name: str, per_second: Callable[[float], float]) -> Outcome:
+    """Time integral of per_second(value) over the held segments of one input."""
+    _, held, spans = hold_segments(env, [name])
+    return sum(per_second(v[0]) * s for v, s in zip(held, spans, strict=True)), None
+
+
+def _axis_index(value: float, axis: Mapping[str, Any]) -> int | None:
+    """Index of the uniform bin [min, max) of one axis containing value, None if outside."""
+    low, high, count = axis["min"], axis["max"], axis["count"]
+    if not low <= value < high:
+        return None
+    return min(count - 1, int((value - low) / (high - low) * count))
+
+
+def bin_edges(axis: Mapping[str, Any], index: int) -> tuple[float, float]:
+    """Lower and upper edge of bin `index` of an axis (the last upper edge is `max`)."""
+    low, high, count = axis["min"], axis["max"], axis["count"]
+    width = (high - low) / count
+    return low + index * width, high if index == count - 1 else low + (index + 1) * width
+
+
+def cell_axes(bins: list[Mapping[str, Any]], cell: int) -> list[int]:
+    """Per-axis bin indices of a row-major cell index (the first axis is the major one)."""
+    indices: list[int] = []
+    for axis in reversed(bins):
+        cell, i = divmod(cell, axis["count"])
+        indices.append(i)
+    return indices[::-1]
+
+
+def cell_count(bins: list[Mapping[str, Any]]) -> int:
+    return math.prod(axis["count"] for axis in bins)
+
+
+def _time_in_bins(env: SummaryEnv) -> Binned:
+    """Seconds per cell of the defs `bins`: the held values of every bins input (hold rule
+    of hold_segments) are attributed to their cell; a held value outside an axis range is
+    counted in no cell, its seconds go to outside_s."""
+    names = [axis["input"] for axis in env.bins]
+    _, held, spans = hold_segments(env, names)
+    seconds = [0.0] * cell_count(env.bins)
+    outside = 0.0
+    for values, span in zip(held, spans, strict=True):
+        cell = 0
+        for value, axis in zip(values, env.bins, strict=True):
+            i = _axis_index(value, axis)
+            if i is None:
+                cell = -1
+                break
+            cell = cell * axis["count"] + i
+        if cell < 0:
+            outside += span
+        else:
+            seconds[cell] += span
+    return Binned([(s, None) for s in seconds], outside)
+
+
+# --- distance, time, stops ------------------------------------------------------------------
+
+
+@_summary("ride_distance")
+def ride_distance(env: SummaryEnv) -> Outcome:
+    """Last valid derived.trip_distance, km."""
+    return _last_valid(env, _TRIP_DISTANCE)
+
+
+@_summary("ride_time")
+def ride_time(env: SummaryEnv) -> Outcome:
+    """Last valid derived.trip_time, s."""
+    return _last_valid(env, _TRIP_TIME)
+
+
+@_summary("ride_idle_time")
+def ride_idle_time(env: SummaryEnv) -> Outcome:
+    """Last valid derived.idle_time, s."""
+    return _last_valid(env, _IDLE_TIME)
+
+
+@_summary("ride_stop_count")
+def ride_stop_count(env: SummaryEnv) -> Outcome:
+    """Number of valid derived.stop_event rows."""
+    return float(len(env.valid(_STOP_EVENT))), None
+
+
+# --- fuel -----------------------------------------------------------------------------------
+
+
+@_summary("ride_fuel_used")
+def ride_fuel_used(env: SummaryEnv) -> Outcome:
+    """Time integral of the fuel rate, L (L/h divided by 3600 s/h per second)."""
+    return _integral(env, _FUEL_RATE, lambda rate: rate / SECONDS_PER_HOUR)
+
+
+@_summary("ride_fuel_consumption")
+def ride_fuel_consumption(env: SummaryEnv) -> Outcome:
+    """ride_fuel_used / ride_distance * 100, L/100km; distance <= 0 is "standstill"."""
+    used, distance = env.result(_FUEL_USED), env.result(_DISTANCE)
+    if used is None or distance is None:
+        raise InputInvalid(FLAG_INVALID_INPUT)
+    if distance <= 0:
+        raise InputInvalid(FLAG_STANDSTILL)
+    return used / distance * LITRES_PER_100KM_FACTOR, None
+
+
+@_summary("ride_ltft_mean")
+def ride_ltft_mean(env: SummaryEnv) -> Outcome:
+    """Arithmetic mean of the valid long-term fuel trim samples (bank 1), %."""
+    samples = env.samples(_LTFT)
+    return sum(samples) / len(samples), None
+
+
+@_summary("ride_stft_std")
+def ride_stft_std(env: SummaryEnv) -> Outcome:
+    """Population standard deviation of the valid short-term fuel trim samples (bank 1), %;
+    fewer than two samples are "insufficient_samples"."""
+    samples = env.samples(_STFT)
+    if len(samples) < 2:
+        raise InputInvalid(FLAG_INSUFFICIENT_SAMPLES)
+    mean = sum(samples) / len(samples)
+    return math.sqrt(sum((v - mean) ** 2 for v in samples) / len(samples)), None
+
+
+# --- time in cells (operating point, temperature) ---------------------------------------------
+
+
+@_summary("operating_point_time")
+def operating_point_time(env: SummaryEnv) -> Binned:
+    """Seconds per (ENGINE_SPEED, ENGINE_LOAD) cell: uniform bins [min, max) per axis from the
+    defs, cell = speed bin * load count + load bin; the time of a held value is attributed to
+    its cell, a value outside an axis range to no cell (outside_s)."""
+    return _time_in_bins(env)
+
+
+@_summary("ride_coolant_time_at_temp")
+def ride_coolant_time_at_temp(env: SummaryEnv) -> Binned:
+    """Seconds per coolant temperature bin [min, max) of the defs; outside values in outside_s."""
+    return _time_in_bins(env)
+
+
+@_summary("ride_oil_time_at_temp")
+def ride_oil_time_at_temp(env: SummaryEnv) -> Binned:
+    """Seconds per engine oil temperature bin [min, max) of the defs; outside values in
+    outside_s."""
+    return _time_in_bins(env)
+
+
+# --- thermal ----------------------------------------------------------------------------------
+
+
+@_summary("ride_coolant_rate_max")
+def ride_coolant_rate_max(env: SummaryEnv) -> Outcome:
+    """Largest valid derived.coolant_rate, degC/min."""
+    values = env.valid(_COOLANT_RATE)
+    if not values:
+        raise InputInvalid(FLAG_INVALID_INPUT)
+    return max(values), None
+
+
+@_summary("ride_start_coolant_temp")
+def ride_start_coolant_temp(env: SummaryEnv) -> Outcome:
+    """First valid coolant temperature sample, degC."""
+    return env.samples(_COOLANT)[0], None
+
+
+@_summary("ride_end_coolant_temp")
+def ride_end_coolant_temp(env: SummaryEnv) -> Outcome:
+    """Last valid coolant temperature sample, degC."""
+    return env.samples(_COOLANT)[-1], None
+
+
+@_summary("ride_start_intake_temp")
+def ride_start_intake_temp(env: SummaryEnv) -> Outcome:
+    """First valid intake air temperature sample, degC."""
+    return env.samples(_INTAKE)[0], None
+
+
+# --- GNSS and bus health ------------------------------------------------------------------------
+
+
+@_summary("ride_distance_gps")
+def ride_distance_gps(env: SummaryEnv) -> Outcome:
+    """Time integral of the GNSS ground speed, km (m/s divided by 1000 m/km per second).
+    Only fixed samples exist (inputs.py); speed only, never a position."""
+    return _integral(env, _GPS_SPEED, lambda speed: speed / M_PER_KM)
+
+
+@_summary("ride_bus_off_count")
+def ride_bus_off_count(env: SummaryEnv) -> Outcome:
+    """Sum of the increments of the cumulative bus-off counter between consecutive samples
+    (the first sample is the baseline). A decrease means the node restarted: the new value
+    itself is then the increment."""
+    samples = env.samples(_BUS_OFF)
+    total = 0.0
+    for previous, current in zip(samples, samples[1:], strict=False):
+        total += current - previous if current >= previous else current
+    return total, None
+
+
+@_summary("ride_tester_rtt_max")
+def ride_tester_rtt_max(env: SummaryEnv) -> Outcome:
+    """Largest valid tester round-trip maximum sample, ms."""
+    return max(env.samples(_RTT_MAX)), None
+
+
+@_summary("ride_tester_step_gap_max")
+def ride_tester_step_gap_max(env: SummaryEnv) -> Outcome:
+    """Largest valid tester step-gap maximum sample, ms."""
+    return max(env.samples(_STEP_GAP_MAX)), None
+
+
+# --- evaluation ---------------------------------------------------------------------------------
+
+
+@dataclass
+class SummaryRow:
+    """One scalar (cell None) or one cell of a binned summary."""
+
+    signal: str
+    unit: str
+    cell: int | None
+    edges: list[tuple[float, float]]  # per bins axis (empty for scalars)
+    value: float | None
+    flag: str | None
+
+
+@dataclass
+class SummaryEvaluation:
+    rows: list[SummaryRow] = field(default_factory=list)
+    coverage: dict[str, dict[str, Any]] = field(default_factory=dict)  # class B, defs order
+
+
+def _checked(value: float | None, flag: str | None, rng: list[float]) -> Outcome:
+    if value is not None and not (math.isfinite(value) and rng[0] <= value <= rng[1]):
+        return None, FLAG_OUT_OF_RANGE
+    return value, flag
+
+
+def _feeds_of(
+    spec: Mapping[str, Any],
+    inputs: InputSource,
+    outputs: Mapping[str, SignalOutput],
+    results: Mapping[str, float | None],
+    specs: Mapping[str, Mapping[str, Any]],
+    sensors: Mapping[str, Mapping[str, Any]],
+) -> tuple[dict[str, Feed], list[str]]:
+    """The feeds of the did/sensor inputs and the list of inputs that are missing here."""
+    feeds: dict[str, Feed] = {}
+    missing: list[str] = []
+    for inp in spec["inputs"]:
+        kind, _, key = inp.partition(".")
+        if kind == "const":
+            continue
+        if kind == "derived":
+            present = key in (outputs if specs[key]["class"] == "A" else results)
+            if not present:
+                missing.append(inp)
+            continue
+        series = inputs.series(inp)
+        if series is None:
+            missing.append(inp)
+            continue
+        stale = sensors[key]["stale_after_ms"] if kind == "sensor" else did_age_limit_ms(key)
+        feeds[inp] = Feed(series.times, list(series.values), stale)
+    return feeds, missing
+
+
+def _summarize_one(
+    name: str,
+    spec: Mapping[str, Any],
+    summary: Summary,
+    env: SummaryEnv,
+    result: SummaryEvaluation,
+    results: dict[str, float | None],
+) -> dict[str, Any]:
+    unit, rng = spec["unit"], list(spec["range"])
+    try:
+        outcome: Outcome | Binned = summary.fn(env)
+    except InputInvalid as exc:
+        outcome = (None, exc.flag)
+    if isinstance(outcome, Binned):
+        cells = [_checked(value, flag, rng) for value, flag in outcome.cells]
+        for index, (value, flag) in enumerate(cells):
+            axes = cell_axes(env.bins, index)
+            edges = [bin_edges(axis, i) for axis, i in zip(env.bins, axes, strict=True)]
+            result.rows.append(SummaryRow(name, unit, index, edges, value, flag))
+        valid = [v for v, _ in cells if v is not None]
+        return {
+            "status": COMPUTED,
+            "unit": unit,
+            "cells": len(cells),
+            "nonzero_cells": sum(v > 0 for v in valid),
+            "total_s": sum(valid),
+            "outside_s": outcome.outside_s,
+        }
+    value, flag = _checked(outcome[0], outcome[1], rng)
+    result.rows.append(SummaryRow(name, unit, None, [], value, flag))
+    results[name] = value
+    return {"status": COMPUTED, "value": value, "unit": unit, "flag": flag}
+
+
+def evaluate(
+    inputs: InputSource,
+    evaluation: Evaluation,
+    specs: Mapping[str, Mapping[str, Any]] | None = None,
+    summaries: Mapping[str, Summary] | None = None,
+    sensors: Mapping[str, Mapping[str, Any]] | None = None,
+) -> SummaryEvaluation:
+    """Evaluates every class-B signal of `specs` (default: the pinned defs) over `inputs`
+    and the class-A `evaluation`."""
+    specs = specs if specs is not None else vehicle_derived.SIGNALS
+    summaries = summaries if summaries is not None else SUMMARIES
+    sensors = sensors if sensors is not None else vehicle_derived.SENSORS
+
+    outputs = {o.name: o for o in evaluation.outputs}
+    results: dict[str, float | None] = {}  # computed class-B scalars
+    result = SummaryEvaluation()
+    entries: dict[str, dict[str, Any]] = {}
+    for name in dependency_order(specs):
+        spec = specs[name]
+        if spec["class"] != "B":
+            continue
+        pending = list(spec.get("pending_inputs") or [])
+        if not spec.get("ready_phase0", False) or pending:
+            reason = "ready_phase0" if not spec.get("ready_phase0", False) else "pending_inputs"
+            entries[name] = {"status": NOT_READY, "reason": reason, "pending_inputs": pending}
+        elif name not in summaries:
+            reason = NOT_IMPLEMENTED_REASONS.get(name, "no summary")
+            entries[name] = {"status": NOT_IMPLEMENTED, "reason": reason}
+        else:
+            try:
+                feeds, missing = _feeds_of(spec, inputs, outputs, results, specs, sensors)
+                if missing:
+                    entries[name] = {"status": MISSING_INPUTS, "missing": missing}
+                else:
+                    env = SummaryEnv(spec, feeds, outputs, results)
+                    entries[name] = _summarize_one(
+                        name, spec, summaries[name], env, result, results
+                    )
+            except Exception as exc:  # one failing summary must not stop the others
+                entries[name] = {"status": ERROR, "message": f"{type(exc).__name__}: {exc}"}
+    result.coverage = {name: entries[name] for name in specs if name in entries}  # defs order
+    return result

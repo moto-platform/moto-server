@@ -231,19 +231,18 @@ def gear_estimate(at: At) -> float:
 # --- class A: distance and time (integrals along the time axis) -----------------------------
 
 
-def _integrate(
-    env: Env, names: list[str], rate: Callable[[list[float]], float], grid: list[int]
-) -> list[Outcome]:
-    """Cumulative integral of rate(inputs) per second over the whole session.
+def hold_segments(env: Env, names: list[str]) -> tuple[list[int], list[list[float]], list[float]]:
+    """The time axis of an integral: per usable breakpoint (the union of the input sample
+    times where every input is fresh) its time, the input values held from there and the
+    seconds they are held.
 
-    The rate is held between breakpoints (the union of the input sample times), but never
-    longer than the shortest remaining freshness of the inputs, so a gap in the data adds
-    nothing. The output at a grid time is null while any input is stale there. The
-    integral starts when every input first exists (session start = key-on)."""
+    A value is held until the next breakpoint, but never longer than the shortest remaining
+    freshness of the inputs, so a gap in the data adds nothing. Shared by the class-A
+    integrals and the class-B summaries (derived/summary.py)."""
     feeds = [env.feed(n) for n in names]
     breakpoints = sorted({t for f in feeds for t in f.times})
     starts: list[int] = []
-    rates: list[float] = []
+    held: list[list[float]] = []
     spans: list[float] = []
     for j, b in enumerate(breakpoints):
         at = At(env, b)
@@ -254,8 +253,22 @@ def _integrate(
         remaining = min(f.times[f.latest(b)] + f.stale_after_ms - b for f in feeds)
         until_next = breakpoints[j + 1] - b if j + 1 < len(breakpoints) else 0
         starts.append(b)
-        rates.append(rate(values))
+        held.append(values)
         spans.append(max(0, min(until_next, remaining)) / 1000.0)
+    return starts, held, spans
+
+
+def _integrate(
+    env: Env, names: list[str], rate: Callable[[list[float]], float], grid: list[int]
+) -> list[Outcome]:
+    """Cumulative integral of rate(inputs) per second over the whole session.
+
+    The rate is held between breakpoints (the union of the input sample times), but never
+    longer than the shortest remaining freshness of the inputs, so a gap in the data adds
+    nothing. The output at a grid time is null while any input is stale there. The
+    integral starts when every input first exists (session start = key-on)."""
+    starts, held, spans = hold_segments(env, names)
+    rates = [rate(values) for values in held]
     prefix = [0.0]
     for r, s in zip(rates, spans, strict=True):
         prefix.append(prefix[-1] + r * s)
