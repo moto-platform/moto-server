@@ -41,7 +41,7 @@ The server side (Python, D-010): receives, stores, and serves ride data coming f
 `uv` + `ruff` + `pytest` (D-007), FastAPI. Local services run via `docker compose`.
 
 ```bash
-git submodule update --init --recursive   # external/moto-vehicle-defs, pinned to v0.11.0 (moves to v0.13.0 once that tag exists; the derived signals need defs main 03729d3 or later)
+git submodule update --init --recursive   # external/moto-vehicle-defs, pinned to v0.13.0
 uv sync
 uv run pytest
 uv run ruff check .

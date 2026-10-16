@@ -15,7 +15,7 @@ organization; see `moto-vehicle-defs/docs/ARCHITECTURE.md` for the platform pict
 ## Setup
 
 ```bash
-git submodule update --init --recursive   # external/moto-vehicle-defs, pinned to v0.11.0 (moves to v0.13.0 once that tag exists)
+git submodule update --init --recursive   # external/moto-vehicle-defs, pinned to v0.13.0
 uv sync                                    # installs runtime + dev dependencies
 ```
 
