@@ -325,6 +325,33 @@ the class-A step; an exception is recorded as `derived_summary: {"error": ...}`,
 and never fails the ingest. The file is removed when there is no row. `moto-server derive`
 recomputes both files and prints one more line per session. There is no index column.
 
+## Golden vectors for rt-core (D-070 item 2)
+
+`src/moto_server/derived/golden.py` runs the Python reference over four synthetic
+scenarios (`idle_warmup`, `accel_gears`, `stale_gap`, `edge_values`; no GPS, no real ride,
+no randomness) and writes the inputs and the expected outputs as C99 headers for the
+moto-rt-core host tests:
+
+```bash
+uv run moto-server golden --out <moto-rt-core>/tests/host/vectors   # also python -m moto_server.derived.golden
+```
+
+- Location in rt-core: `tests/host/vectors/` (`derived_vectors.h` types + one
+  `derived_<scenario>.h` per scenario). The headers are committed there; rt-core never
+  depends on this repo, the host tests read no files and parse no strings. The headers use
+  `VEHICLE_CL250_IDX_<NAME>` / `VEHICLE_CL250_DERIVED_<NAME>` of the generated defs code.
+- Selection rule: class A, a formula in `FORMULAS`, `ready_rt_core` true, no `sensor.*`
+  input (a GPS name is asserted never to be an input). Point and series signals have every
+  output row; `stop_event` has one row per event at the event time (value = duration, s).
+  Inputs are only the DIDs of those signals (plus `BATTERY_VOLTAGE`) at their own
+  `poll_period_ms`, quantised to the DID's raw grid and float32. Invalid rows carry `valid =
+  false`, a flag and value `0.0f`. The command fails if a selected signal is never valid.
+- Tolerance: `abs_tol` = the defs `resolution` / 2 per signal (`derived_<scenario>_tol[]`).
+- Drift check: `tests/golden/MANIFEST.sha256` lists the content-sha256 of every file (the
+  hash in the banner covers the body after it, so it does not change with the server commit)
+  and the defs version. `tests/test_golden.py` regenerates and compares; after a formula or
+  defs-pin change, rerun the command above, commit the headers in rt-core and the manifest here.
+
 ## Development
 
 ```bash

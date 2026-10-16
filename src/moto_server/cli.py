@@ -1,4 +1,4 @@
-"""Command-line entry point: `moto-server import|serve|report|list|derive`."""
+"""Command-line entry point: `moto-server import|serve|report|list|derive|golden`."""
 
 from __future__ import annotations
 
@@ -104,6 +104,12 @@ def _cmd_derive(args: argparse.Namespace) -> int:
     return exit_code
 
 
+def _cmd_golden(args: argparse.Namespace) -> int:
+    from moto_server.derived import golden
+
+    return golden.run(args.out, args.manifest)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="moto-server")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -132,6 +138,14 @@ def build_parser() -> argparse.ArgumentParser:
     derive_parser.add_argument("session_id", nargs="?", help="a stored session id")
     derive_parser.add_argument("--all", action="store_true", help="every stored session")
     derive_parser.set_defaults(func=_cmd_derive)
+
+    golden_parser = subparsers.add_parser(
+        "golden", help="write the golden C vectors for the rt-core host tests (D-070)"
+    )
+    from moto_server.derived import golden
+
+    golden.add_arguments(golden_parser)
+    golden_parser.set_defaults(func=_cmd_golden)
 
     return parser
 
