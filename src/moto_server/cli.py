@@ -1,4 +1,4 @@
-"""Command-line entry point: `moto-server import|serve|report`."""
+"""Command-line entry point: `moto-server import|serve|report|list|derive`."""
 
 from __future__ import annotations
 
@@ -9,7 +9,12 @@ from pathlib import Path
 
 from moto_server import index, report
 from moto_server.config import load_settings
-from moto_server.ingest import InvalidSessionError, SessionConflictError, ingest_path
+from moto_server.ingest import (
+    InvalidSessionError,
+    SessionConflictError,
+    ingest_path,
+    rederive_session,
+)
 
 EXIT_OK_OR_WARN = 0
 EXIT_FAIL_OR_ERROR = 1
@@ -61,9 +66,34 @@ def _cmd_list(_args: argparse.Namespace) -> int:
             f"{row.session_id}  status={row.status}  packets={row.packet_count}  "
             f"loss={row.loss_percent:.2f}%  imu={'yes' if row.has_imu else 'no'}  "
             f"gps={'yes' if row.has_gps else 'no'}  "
-            f"signals={'yes' if row.has_vehicle_signals else 'no'}"
+            f"signals={'yes' if row.has_vehicle_signals else 'no'}  "
+            f"derived={'yes' if row.has_derived else 'no'}"
         )
     return EXIT_OK_OR_WARN
+
+
+def _cmd_derive(args: argparse.Namespace) -> int:
+    settings = load_settings()
+    if args.all:
+        session_ids = [row.session_id for row in index.list_sessions(settings.index_db_path)]
+    else:
+        session_ids = [args.session_id]
+
+    exit_code = EXIT_OK_OR_WARN
+    for session_id in session_ids:
+        try:
+            block = rederive_session(settings, session_id)
+        except FileNotFoundError:
+            print(f"error: unknown session: {session_id}", file=sys.stderr)
+            exit_code = EXIT_FAIL_OR_ERROR
+            continue
+        if "error" in block:
+            print(f"{session_id}  derived error: {block['error']}", file=sys.stderr)
+            exit_code = EXIT_FAIL_OR_ERROR
+            continue
+        summary = ", ".join(f"{n} {status}" for status, n in sorted(block["summary"].items()))
+        print(f"{session_id}  derived rows={block['rows']} valid={block['valid_rows']}  {summary}")
+    return exit_code
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -88,12 +118,21 @@ def build_parser() -> argparse.ArgumentParser:
     list_parser = subparsers.add_parser("list", help="list ingested sessions")
     list_parser.set_defaults(func=_cmd_list)
 
+    derive_parser = subparsers.add_parser(
+        "derive", help="recompute the derived signals of stored sessions (D-070)"
+    )
+    derive_parser.add_argument("session_id", nargs="?", help="a stored session id")
+    derive_parser.add_argument("--all", action="store_true", help="every stored session")
+    derive_parser.set_defaults(func=_cmd_derive)
+
     return parser
 
 
 def main(argv: list[str] | None = None) -> None:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.command == "derive" and bool(args.all) == bool(args.session_id):
+        parser.error("derive needs exactly one of <session_id> or --all")
     sys.exit(args.func(args))
 
 

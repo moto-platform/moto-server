@@ -25,7 +25,13 @@ if _DEFS_PYTHON.is_dir() and str(_DEFS_PYTHON) not in sys.path:
 
 try:
     import moto_defs  # noqa: E402
-    from moto_defs import ble, vehicle_catalog, vehicle_cl250  # noqa: E402
+    from moto_defs import (  # noqa: E402
+        ble,
+        vehicle_catalog,
+        vehicle_cl250,
+        vehicle_constants,
+        vehicle_derived,
+    )
 except ImportError as exc:  # pragma: no cover - fails fast at startup
     raise ImportError(
         "moto_defs could not be imported from "
@@ -63,4 +69,12 @@ def defs_version() -> str:
         return "unknown"
 
 
-__all__ = ["moto_defs", "ble", "vehicle_catalog", "vehicle_cl250", "defs_version"]
+__all__ = [
+    "moto_defs",
+    "ble",
+    "vehicle_catalog",
+    "vehicle_cl250",
+    "vehicle_constants",
+    "vehicle_derived",
+    "defs_version",
+]

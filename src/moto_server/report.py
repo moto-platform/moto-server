@@ -627,4 +627,14 @@ def render_text(report: dict[str, Any]) -> str:
                 detail += f", NRC {item['nrcs']}"
             lines.append(f"    {label}: {detail}")
 
+    derived = report.get("derived")
+    if derived and "error" in derived:
+        lines.append(f"  derived signals: error: {derived['error']}")
+    elif derived:
+        summary = ", ".join(f"{n} {status}" for status, n in sorted(derived["summary"].items()))
+        lines.append(
+            f"  derived signals: {derived['rows']} row(s), {derived['valid_rows']} valid "
+            f"({summary})"
+        )
+
     return "\n".join(lines) + "\n"

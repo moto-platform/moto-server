@@ -30,7 +30,7 @@ SCHEMA = ble_schema.load_default_schema()
 VSIG = SCHEMA["vehicleSignalBlock"]
 FIXTURE = "v4_vsig_session"
 
-ENGINE_LOAD_DID = vehicle_catalog.SIGNALS["ENGINE_LOAD"]["did"]  # a candidate (D-066 item 3)
+ENGINE_LOAD_DID = vehicle_catalog.SIGNALS["ENGINE_LOAD"]["did"]  # outside the sender table (D-066)
 UNKNOWN_DID = max(vehicle_catalog.BY_DID) + 1
 
 
@@ -71,8 +71,13 @@ def test_fixture_covers_the_d066_cases(fixtures_dir: Path):
     assert len(rows) == 16
     assert len(group_signal_blocks(rows)) == 4
     assert all(r.decode_error is None and not r.mismatches for r in rows)
-    # A candidate DID (not polled by the sender's original table) in state valid.
-    assert vehicle_catalog.SIGNALS["ENGINE_LOAD"]["status"] == vehicle_catalog.STATUS_CANDIDATE
+    # A DID outside the sender's table (D-066 item 3 candidate; D-068 promoted every catalog
+    # DID to polled) in state valid: it is decoded generically from the catalog, whatever
+    # its status, so the status itself is not asserted here.
+    assert vehicle_catalog.SIGNALS["ENGINE_LOAD"]["status"] in (
+        vehicle_catalog.STATUS_POLLED,
+        vehicle_catalog.STATUS_CANDIDATE,
+    )
     assert _row_of(rows, ENGINE_LOAD_DID).state_name == "valid"
     assert {r.state_name for r in rows} == {"valid", "stale", "skipped", "negativeResponse"}
     assert _row_of(rows, UNKNOWN_DID).signal is None
@@ -187,7 +192,7 @@ def test_parquet_has_one_channel_per_catalog_signal_with_its_unit(
     data = table.to_pydict()
 
     load = [i for i, s in enumerate(data["signal"]) if s == "ENGINE_LOAD"]
-    assert len(load) == 2  # the promoted candidate is a channel like any polled signal
+    assert len(load) == 2  # a catalog DID is a channel like any other
     assert {data["unit"][i] for i in load} == {"%"}
     assert [data["value"][i] for i in load] == [pytest.approx(40.0), pytest.approx(128 * 100 / 255)]
     assert [data["did"][i] for i in load] == [ENGINE_LOAD_DID] * 2

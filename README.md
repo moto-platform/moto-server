@@ -15,7 +15,7 @@ organization; see `moto-vehicle-defs/docs/ARCHITECTURE.md` for the platform pict
 ## Setup
 
 ```bash
-git submodule update --init --recursive   # external/moto-vehicle-defs, pinned to v0.11.0
+git submodule update --init --recursive   # external/moto-vehicle-defs, pinned to v0.13.0
 uv sync                                    # installs runtime + dev dependencies
 ```
 
@@ -42,6 +42,8 @@ uv run moto-server import <folder-or-zip>      # ingest a session, print its rep
 uv run moto-server report <session_id>         # re-print a stored session's report
 uv run moto-server report <session_id> --format json
 uv run moto-server list                        # one line per ingested session
+uv run moto-server derive <session_id>         # recompute the derived signals of a stored session
+uv run moto-server derive --all                # ... of every stored session
 uv run moto-server serve [--host] [--port] [--reload]
 ```
 
@@ -67,14 +69,15 @@ top-level folder -- see the session contract the phone app writes to.
 
 ```
 $MOTO_DATA_DIR/
-  index.sqlite                     # one row per ingested session
+  index.sqlite                     # one row per ingested session (has_imu, has_gps, has_vehicle_signals, has_derived)
   sessions/<session_id>/
     raw/                           # the uploaded files, verbatim
     parquet/telemetry.parquet      # decoded telemetry, one row per BLE packet (incl. tester stats)
     parquet/imu.parquet            # decoded IMU samples (if imu.csv was present)
     parquet/gps.parquet            # decoded GPS blocks (if gps.csv was present)
     parquet/signals.parquet        # vehicle-signal records (if signals.csv was present)
-    report.json                    # validation report (see below)
+    parquet/derived.parquet        # derived signals, long format (if any could be computed)
+    report.json                    # validation report (see below), incl. the `derived` block
 ```
 
 Parquet column names follow `<defs signal>_<unit>` (e.g. `engine_speed_rpm`,
@@ -193,6 +196,54 @@ DID or a `vehicle_signal_block_version` in `meta.json` that differs from the pin
 make the session `warn` (the key is absent in sessions from older app builds). Negative
 responses, stale, skipped and unknown DIDs are normal and do not. `signals.csv` holds
 engine data only (no position), so the D-063 local-only rule for `gps.csv` does not apply.
+
+## Derived signals (D-070 item 2)
+
+`moto_defs.vehicle_derived` defines the derived signals (class A live on rt-core, B per ride,
+C across rides, D server only). Until rt-core exists the Python reference in
+`src/moto_server/derived/` computes them offline from a stored session:
+
+- `inputs.py`: one series per input on the node's `device_time_ms`. `did.<NAME>` rows come
+  from `signals.parquet` (`signal == NAME`, `value` set, at `sample_device_time_ms`; the five
+  telemetry DIDs are the fallback when there is no `signals.csv`); `sensor.<name>` maps
+  through `SENSORS[name]["phase0"]` (`ble.imuBlock.ax` -> `imu.parquet` `ax_g`, converted to
+  m/s2 with standard gravity; `ble.gpsBlock.*` -> `gps.parquet`, speed, speed accuracy,
+  heading of motion and fix type only, never a position); `const.<name>` is
+  `moto_defs.vehicle_constants`. Sensors the server does not store (e.g. `lean_angle`, the
+  CAN counters: telemetry.parquet keeps only the tester columns) are `missing_inputs`.
+- `engine.py`: topological order over `derived.*` inputs; the output grid is the signal's
+  `period_ms` from the span where all inputs exist. An input counts while its age is within
+  its `stale_after_ms` (the signal's own for `did.*`, `SENSORS` for sensors, the producer's for
+  `derived.*`); otherwise the row is null with flag `stale_input`. A null derived input gives
+  `invalid_input`, too few samples in a window `insufficient_samples`, a result outside the
+  defs `range` null with `out_of_range`. `window_ms` is the least-squares slope window
+  (`vehicle_accel`, `vehicle_jerk`) or the moving-average window (`yaw_rate`,
+  `accel_imu_residual`).
+- `formulas.py`: the first batch of 19 class-A signals, from vehicle-data-catalog section 5
+  (and each signal's defs description). Assumptions: the ECU speed is km/h and integer; the
+  IMU z axis is the yaw axis and x the longitudinal axis (no mounting or lean correction,
+  gravity not removed from `accel_imu_residual`); `trip_distance`, `trip_time` and `idle_time`
+  integrate from the first common sample and hold a sample for at most its stale limit, so a
+  gap adds nothing; `gear_estimate` matches within 5 % of a gear ratio (else 0);
+  `turn_radius` is `v / |omega|` and null below 0.5 deg/s; `air_density` is the dry ideal-gas
+  density (R = 287.058 J/(kg K)) with the intake temperature; `power_correction_factor` is
+  rho_ref / rho with rho_ref at the SAE J1349 reference (99 kPa, 25 degC), the density-ratio
+  form rather than the full standard; `air_fuel_ratio` and `fuel_rate_maf` use the commanded
+  lambda and `stoichiometric_afr` / `fuel_density_kg_per_l`. Provisional vehicle constants
+  used are listed in the report block.
+- Not computed: events (`stop_event`, `shift_event`, ...: the catalog gives no rule), the
+  other class-A signals, and class B/C/D (`not_implemented`); signals with `ready_phase0:
+  false` or `pending_inputs` (`not_ready`, never evaluated).
+
+`parquet/derived.parquet` is long format: `session_id` (every row),
+`device_time_ms`, `signal`, `value` (float64, null when invalid), `unit`, `valid` (bool) and
+`flag` (null, or why the row is invalid). The report's `derived` block holds the defs version
+used, `summary` (count per status), `rows` / `valid_rows` and, per signal of the defs, its
+`status`: `computed` (with `rows`, `valid_rows`, `flag_counts`), `not_implemented`,
+`not_ready` (`reason` `ready_phase0` / `pending_inputs`), `missing_inputs` (`missing`) or
+`error` (`message`). It is computed during ingest after the parquet step; an exception is
+recorded as `derived: {"error": ...}`, leaves the ingest status unchanged and writes no
+`derived.parquet`. `moto-server derive` recomputes it after a defs bump or a formula change.
 
 ## Development
 
