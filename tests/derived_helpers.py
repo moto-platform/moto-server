@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from moto_server.defs import vehicle_derived
-from moto_server.derived.context import At, Env, Feed
+from moto_server.derived.context import At, Env, Feed, did_age_limit_ms
 from moto_server.derived.formulas import FORMULAS
 from moto_server.derived.inputs import Series
 
@@ -38,6 +38,8 @@ def stale_limit(signal: str, input_name: str) -> int:
         return vehicle_derived.SENSORS[key]["stale_after_ms"]
     if kind == "derived":
         return vehicle_derived.SIGNALS[key]["stale_after_ms"]
+    if vehicle_derived.SIGNALS[signal].get("event"):  # events: the D-025 age limit
+        return did_age_limit_ms(key)
     return vehicle_derived.SIGNALS[signal]["stale_after_ms"]
 
 

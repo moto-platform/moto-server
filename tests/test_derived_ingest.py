@@ -109,7 +109,9 @@ def test_ingest_writes_derived_parquet_and_report_block(settings: Settings, imu_
     # lateral acceleration: v * omega at a valid speed sample (40 km/h, 5 deg/s)
     lateral = {r["device_time_ms"]: r for r in _rows(table, "lateral_accel")}
     assert lateral[9040]["value"] == pytest.approx(40 / 3.6 * math.radians(5.0), rel=5e-3)
-    assert lateral[9140]["valid"] is False and lateral[9140]["flag"] == "stale_input"
+    # the speed sample at 9040 is stale once its age exceeds the signal's stale_after_ms
+    stale_t = 9040 + vehicle_derived.SIGNALS["lateral_accel"]["stale_after_ms"] + 10
+    assert lateral[stale_t]["valid"] is False and lateral[stale_t]["flag"] == "stale_input"
 
     block = result.report["derived"]
     assert block["defs_version"] == result.report["defs_version"]
@@ -128,7 +130,7 @@ def test_ingest_writes_derived_parquet_and_report_block(settings: Settings, imu_
     assert not any(s["status"] == "error" for s in signals.values())
     # nothing was computed for a signal that is not computed
     assert {r["signal"] for r in table.to_pylist()} == {
-        n for n, s in signals.items() if s["status"] == "computed"
+        n for n, s in signals.items() if s["status"] == "computed" and s["rows"]
     }
 
     on_disk = json.loads((settings.sessions_dir / result.session_id / "report.json").read_text())

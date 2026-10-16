@@ -7,6 +7,7 @@ For every signal of moto_defs.vehicle_derived.SIGNALS the engine decides a statu
     missing_inputs   an input is absent here (no file / column / samples, or a derived input
                      that was not computed), or the inputs share no time span
     error            the evaluation raised
+An event signal (formula kind "event") has no grid: its rows are at the event times.
 A computed signal is evaluated on a grid of period_ms (from the defs) from the latest
 first-sample time to the earliest last-sample time of its inputs. Each output row is
 valid or null with a flag: a stale input (age above that input's stale_after_ms; for a
@@ -23,7 +24,14 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from moto_server.defs import vehicle_constants, vehicle_derived
-from moto_server.derived.context import FLAG_OUT_OF_RANGE, At, Env, Feed, InputInvalid
+from moto_server.derived.context import (
+    FLAG_OUT_OF_RANGE,
+    At,
+    Env,
+    Feed,
+    InputInvalid,
+    did_age_limit_ms,
+)
 from moto_server.derived.formulas import FORMULAS, Formula
 from moto_server.derived.inputs import Series
 
@@ -104,10 +112,9 @@ def _pre_status(
     if not spec.get("ready_phase0", False) or pending:
         reason = "ready_phase0" if not spec.get("ready_phase0", False) else "pending_inputs"
         return {**entry, "status": NOT_READY, "reason": reason, "pending_inputs": pending}
-    if spec.get("event"):
-        return {**entry, "status": NOT_IMPLEMENTED, "reason": "event"}
     if name not in formulas:
-        return {**entry, "status": NOT_IMPLEMENTED, "reason": "no formula"}
+        reason = "event" if spec.get("event") else "no formula"
+        return {**entry, "status": NOT_IMPLEMENTED, "reason": reason}
     return None
 
 
@@ -145,31 +152,41 @@ def _evaluate_one(
         if series is None:
             missing.append(inp)
             continue
-        stale = spec["stale_after_ms"] if kind == "did" else sensors[key]["stale_after_ms"]
+        if kind == "sensor":
+            stale = sensors[key]["stale_after_ms"]
+        elif formula.kind == "event":  # events have no stale_after_ms: the D-025 age limit
+            stale = did_age_limit_ms(key)
+        else:
+            stale = spec["stale_after_ms"]
         feeds[inp] = Feed(series.times, list(series.values), stale)
     if missing:
         return None, {"status": MISSING_INPUTS, "missing": missing}
     if not feeds:
         return None, {"status": MISSING_INPUTS, "missing": [], "reason": "no series inputs"}
 
-    start = max(f.times[0] for f in feeds.values())
-    end = min(f.times[-1] for f in feeds.values())
-    if start > end:
-        return None, {"status": MISSING_INPUTS, "missing": [], "reason": "no common time span"}
-    grid = list(range(start, end + 1, spec["period_ms"]))
-
     env = Env(list(spec["inputs"]), feeds, spec.get("window_ms"))
-    if formula.kind == "series":
-        outcomes = formula.fn(env, grid)
+    is_event = formula.kind == "event"
+    if is_event:  # no grid: one row per event, at the event time
+        events = formula.fn(env)
+        grid = [t for t, _, _ in events]
+        outcomes = [(value, flag) for _, value, flag in events]
     else:
-        outcomes = []
-        for t in grid:
-            try:
-                outcomes.append((formula.fn(At(env, t)), None))
-            except InputInvalid as exc:
-                outcomes.append((None, exc.flag))
-            except ArithmeticError:
-                outcomes.append((None, FLAG_MATH_ERROR))
+        start = max(f.times[0] for f in feeds.values())
+        end = min(f.times[-1] for f in feeds.values())
+        if start > end:
+            return None, {"status": MISSING_INPUTS, "missing": [], "reason": "no common time span"}
+        grid = list(range(start, end + 1, spec["period_ms"]))
+        if formula.kind == "series":
+            outcomes = formula.fn(env, grid)
+        else:
+            outcomes = []
+            for t in grid:
+                try:
+                    outcomes.append((formula.fn(At(env, t)), None))
+                except InputInvalid as exc:
+                    outcomes.append((None, exc.flag))
+                except ArithmeticError:
+                    outcomes.append((None, FLAG_MATH_ERROR))
 
     low, high = spec["range"]
     values: list[float | None] = []
@@ -180,14 +197,15 @@ def _evaluate_one(
         values.append(value)
         flags.append(flag)
     output = SignalOutput(name, spec["unit"], grid, values, flags)
-    return output, {
-        "status": COMPUTED,
-        "unit": spec["unit"],
-        "period_ms": spec["period_ms"],
+    entry: dict[str, Any] = {"status": COMPUTED, "unit": spec["unit"]}
+    if not is_event:
+        entry["period_ms"] = spec["period_ms"]
+    entry |= {
         "rows": len(grid),
         "valid_rows": output.valid_count,
         "flag_counts": _flag_counts(flags),
     }
+    return output, entry
 
 
 def evaluate(

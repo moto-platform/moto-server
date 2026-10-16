@@ -1,4 +1,4 @@
-"""Formulas of the first batch of derived signals, against hand-computed values."""
+"""Formulas of the derived signals (parts 1 and 2), against hand-computed values."""
 
 from __future__ import annotations
 
@@ -17,6 +17,27 @@ from .derived_helpers import FakeInputs, const_series, env_for, point_value, ram
 SPEED = "did.VEHICLE_SPEED"
 RPM = "did.ENGINE_SPEED"
 KMH_36 = 36.0  # 10 m/s
+# The server stores no parquet column for these sensors (missing_inputs in practice).
+UNSTORED_SENSORS = {"lean_angle"}
+PART2_SIGNALS = [
+    "fuel_consumption_instant",
+    "fuel_consumption_avg",
+    "fuel_range",
+    "bsfc",
+    "fuel_per_stroke",
+    "total_fuel_trim",
+    "throttle_channel_residual",
+    "throttle_command_residual",
+    "grip_channel_residual",
+    "altitude_change",
+    "road_grade",
+    "coolant_rate",
+    "oil_temp_rate",
+    "lean_crosscheck_residual",
+    "stop_event",
+]
+FUEL_DENSITY = vehicle_constants.CONSTANTS["fuel_density_kg_per_l"][0]
+TANK_L = vehicle_constants.CONSTANTS["fuel_tank_capacity_l"][0]
 
 
 def _outputs(inputs: dict, only: str):
@@ -29,9 +50,10 @@ def _outputs(inputs: dict, only: str):
 
 def test_every_formula_is_a_class_a_signal_with_resolvable_inputs():
     names = set()
-    for name in FORMULAS:
+    for name, formula in FORMULAS.items():
         spec = vehicle_derived.SIGNALS[name]
-        assert spec["class"] == "A" and not spec.get("event")
+        assert spec["class"] == "A"
+        assert bool(spec.get("event")) == (formula.kind == "event")
         assert spec["ready_phase0"] and not spec.get("pending_inputs")
         for inp in spec["inputs"]:
             kind, _, key = inp.partition(".")
@@ -44,8 +66,12 @@ def test_every_formula_is_a_class_a_signal_with_resolvable_inputs():
                 assert key in vehicle_derived.SIGNALS, inp
             else:
                 assert kind == "sensor" and key in vehicle_derived.SENSORS, inp
-                assert resolve_sensor(key) is not None, f"{inp} has no parquet column"
-    assert len(FORMULAS) == 19
+                if key in UNSTORED_SENSORS:
+                    assert resolve_sensor(key) is None
+                else:
+                    assert resolve_sensor(key) is not None, f"{inp} has no parquet column"
+    assert len(FORMULAS) == 19 + len(PART2_SIGNALS)
+    assert set(PART2_SIGNALS) <= set(FORMULAS)
     assert "did.VEHICLE_SPEED" in names
 
 
@@ -62,6 +88,8 @@ def test_formulas_only_read_declared_inputs():
         try:
             if formula.kind == "point":
                 point_value(name, feeds, 5000)
+            elif formula.kind == "event":
+                formula.fn(env_for(name, feeds))
             else:
                 formula.fn(env_for(name, feeds), [5000])
         except (InputInvalid, ArithmeticError):
@@ -283,3 +311,280 @@ def test_imu_acceleration_is_converted_from_g_to_mps2():
     assert source.factor == STANDARD_GRAVITY_MPS2
     assert resolve_sensor("imu_gyro_z").column == "gz_dps"
     assert resolve_sensor("imu_gyro_z").factor == 1.0
+
+
+# --- part 2: fuel economy -------------------------------------------------------------------
+
+RATE = "did.ENGINE_FUEL_RATE"
+
+
+def _flag(signal: str, feeds: dict, t: int) -> str:
+    with pytest.raises(InputInvalid) as exc:
+        point_value(signal, feeds, t)
+    return exc.value.flag
+
+
+def test_fuel_consumption_instant_is_rate_over_speed():
+    feeds = {RATE: ([0], [2.0]), SPEED: ([0], [50.0])}  # 2 L/h at 50 km/h
+    assert point_value("fuel_consumption_instant", feeds, 0) == pytest.approx(4.0)
+    assert _flag("fuel_consumption_instant", {RATE: ([0], [2.0]), SPEED: ([0], [0.0])}, 0) == (
+        "standstill"
+    )
+    assert _flag("fuel_consumption_instant", {RATE: ([0], [2.0]), SPEED: ([0], [None])}, 0) == (
+        "invalid_input"
+    )
+    assert _flag("fuel_consumption_instant", {RATE: ([0], [2.0]), SPEED: ([0], [50.0])}, 9000) == (
+        "stale_input"
+    )
+
+
+def test_fuel_consumption_avg_is_the_ratio_of_the_window_means():
+    times = [0, 1000, 2000]
+    feeds = {RATE: (times, [1.0, 2.0, 3.0]), SPEED: (times, [40.0, 50.0, 60.0])}
+    assert point_value("fuel_consumption_avg", feeds, 2000) == pytest.approx(4.0)  # 100 * 2 / 50
+    # samples older than window_ms (60 s) are left out
+    old = {RATE: ([0, 61000, 62000], [9.0, 2.0, 2.0]), SPEED: ([0, 61000, 62000], [9, 50.0, 50.0])}
+    assert point_value("fuel_consumption_avg", old, 62000) == pytest.approx(4.0)
+
+
+def test_fuel_consumption_avg_flags():
+    one = {RATE: ([0, 1000], [1.0, 2.0]), SPEED: ([1000], [50.0])}
+    assert _flag("fuel_consumption_avg", one, 1000) == "insufficient_samples"
+    one = {RATE: ([1000], [2.0]), SPEED: ([0, 1000], [50.0, 50.0])}
+    assert _flag("fuel_consumption_avg", one, 1000) == "insufficient_samples"
+    still = {RATE: ([0, 1000], [1.0, 2.0]), SPEED: ([0, 1000], [0.0, 0.0])}
+    assert _flag("fuel_consumption_avg", still, 1000) == "standstill"
+
+
+def test_fuel_range_from_level_tank_and_average_consumption():
+    feeds = {"did.FUEL_LEVEL": ([0], [50.0]), "derived.fuel_consumption_avg": ([0], [4.0])}
+    # 50 % of the tank / 4 L per 100 km
+    assert point_value("fuel_range", feeds, 0) == pytest.approx(0.5 * TANK_L / 4.0 * 100.0)
+    assert point_value("fuel_range", feeds, 0) == pytest.approx(150.0)  # 12 L tank
+    zero = {"did.FUEL_LEVEL": ([0], [50.0]), "derived.fuel_consumption_avg": ([0], [0.0])}
+    assert _flag("fuel_range", zero, 0) == "no_consumption"
+
+
+def test_bsfc_is_fuel_mass_rate_over_power():
+    feeds = {RATE: ([0], [2.0]), "derived.engine_power": ([0], [5.0])}
+    # 2 L/h * 0.745 kg/L = 1.49 kg/h = 1490 g/h over 5 kW
+    assert point_value("bsfc", feeds, 0) == pytest.approx(2.0 * FUEL_DENSITY * 1000.0 / 5.0)
+    assert point_value("bsfc", feeds, 0) == pytest.approx(298.0)
+    assert _flag("bsfc", {RATE: ([0], [2.0]), "derived.engine_power": ([0], [0.0])}, 0) == (
+        "no_power"
+    )
+    assert _flag("bsfc", {RATE: ([0], [2.0]), "derived.engine_power": ([0], [-1.0])}, 0) == (
+        "no_power"
+    )
+
+
+def test_fuel_per_stroke_is_one_injection_per_two_revolutions():
+    feeds = {RATE: ([0], [2.0]), RPM: ([0], [3000.0])}
+    # 1.49e6 mg/h over 3000 * 60 / 2 = 90000 injections/h
+    assert point_value("fuel_per_stroke", feeds, 0) == pytest.approx(16.5556, abs=1e-4)
+    assert _flag("fuel_per_stroke", {RATE: ([0], [2.0]), RPM: ([0], [0.0])}, 0) == "engine_off"
+
+
+def test_total_fuel_trim_is_the_sum_of_both_trims():
+    feeds = {
+        "did.SHORT_TERM_FUEL_TRIM_B1": ([0], [2.5]),
+        "did.LONG_TERM_FUEL_TRIM_B1": ([0], [-4.0]),
+    }
+    assert point_value("total_fuel_trim", feeds, 0) == pytest.approx(-1.5)
+    assert _flag(
+        "total_fuel_trim", {**feeds, "did.LONG_TERM_FUEL_TRIM_B1": ([0], [1.0])}, 9000
+    ) == ("stale_input")
+
+
+# --- part 2: redundant channels -----------------------------------------------------------------
+
+
+def test_throttle_channel_residual_is_the_largest_pairwise_difference():
+    feeds = {
+        "did.THROTTLE_POS": ([0], [10.0]),
+        "did.ABSOLUTE_THROTTLE_POS_B": ([0], [12.0]),
+        "did.RELATIVE_THROTTLE_POS": ([0], [15.0]),
+    }
+    assert point_value("throttle_channel_residual", feeds, 0) == pytest.approx(5.0)
+    feeds["did.ABSOLUTE_THROTTLE_POS_B"] = ([0], [None])
+    assert _flag("throttle_channel_residual", feeds, 0) == "invalid_input"
+
+
+def test_throttle_command_and_grip_residuals():
+    cmd = {"did.COMMANDED_THROTTLE": ([0], [20.0]), "did.THROTTLE_POS": ([0], [15.0])}
+    assert point_value("throttle_command_residual", cmd, 0) == pytest.approx(5.0)
+    grip = {"did.ACCEL_PEDAL_POS_D": ([0], [30.0]), "did.RELATIVE_ACCEL_PEDAL_POS": ([0], [28.0])}
+    assert point_value("grip_channel_residual", grip, 0) == pytest.approx(2.0)
+    grip["did.RELATIVE_ACCEL_PEDAL_POS"] = ([0], [31.0])
+    assert point_value("grip_channel_residual", grip, 0) == pytest.approx(-1.0)
+
+
+# --- part 2: altitude and grade -----------------------------------------------------------------
+
+BARO = "did.BAROMETRIC_PRESSURE"
+IAT = "did.INTAKE_AIR_TEMP"
+
+
+def _altitude(baro: tuple, iat: tuple, grid: list[int]):
+    return FORMULAS["altitude_change"].fn(env_for("altitude_change", {BARO: baro, IAT: iat}), grid)
+
+
+def test_altitude_change_is_the_hypsometric_height_over_the_first_pressure():
+    baro = ([0, 5000, 10000], [101.325, 101.325, 100.0])
+    iat = ([0, 5000, 10000], [15.0, 15.0, 15.0])
+    out = _altitude(baro, iat, [0, 5000, 10000])
+    # 287.058 * 288.15 / 9.80665 * ln(101.325 / 100) = 111.025 m
+    assert out[0] == (pytest.approx(0.0), None) and out[1] == (pytest.approx(0.0), None)
+    assert out[2][0] == pytest.approx(111.025, abs=1e-3) and out[2][1] is None
+    # a lower pressure than the reference means a climb, a higher one a descent
+    down = _altitude(([0, 5000], [100.0, 101.325]), ([0, 5000], [15.0, 15.0]), [5000])
+    assert down[0][0] == pytest.approx(-111.025, abs=1e-3)  # reference p0 = 100.0 kPa
+
+
+def test_altitude_change_flags_stale_and_invalid_inputs():
+    baro = ([0, 5000, 10000], [101.325, None, 100.0])
+    iat = ([0, 5000], [15.0, 15.0])
+    out = _altitude(baro, iat, [5000, 30000, 40000])
+    assert out[0] == (None, "invalid_input")  # barometric sample at 5000 is invalid
+    assert out[1] == (None, "stale_input")  # both inputs older than stale_after_ms (15000)
+    assert out[2] == (None, "stale_input")
+    # the reference is the first valid sample, not the first sample
+    skip = _altitude(([0, 5000], [None, 100.0]), ([0, 5000], [15.0, 15.0]), [5000])
+    assert skip[0] == (pytest.approx(0.0), None)
+
+
+def test_road_grade_is_altitude_over_distance_in_the_window():
+    feeds = {
+        "derived.altitude_change": ([5000, 10000, 25000], [0.0, 1.0, 4.0]),
+        "derived.trip_distance": ([5000, 25000], [0.0, 0.2]),
+    }
+    # 4 m climbed over 0.2 km = 200 m of road
+    assert point_value("road_grade", feeds, 26000) == pytest.approx(2.0)
+    down = {**feeds, "derived.altitude_change": ([5000, 25000], [0.0, -3.0])}
+    assert point_value("road_grade", down, 26000) == pytest.approx(-1.5)
+
+
+def test_road_grade_flags_and_leaves_the_imu_input_unused():
+    one = {
+        "derived.altitude_change": ([25000], [4.0]),
+        "derived.trip_distance": ([5000, 25000], [0.0, 0.2]),
+    }
+    assert _flag("road_grade", one, 26000) == "insufficient_samples"
+    one = {
+        "derived.altitude_change": ([5000, 25000], [0.0, 4.0]),
+        "derived.trip_distance": ([25000], [0.2]),
+    }
+    assert _flag("road_grade", one, 26000) == "insufficient_samples"
+    still = {
+        "derived.altitude_change": ([5000, 25000], [0.0, 0.0]),
+        "derived.trip_distance": ([5000, 25000], [0.2, 0.2]),
+    }
+    assert _flag("road_grade", still, 26000) == "standstill"
+    # no IMU feed is needed by the formula itself (declared as context only)
+    assert "sensor.imu_accel_x" in vehicle_derived.SIGNALS["road_grade"]["inputs"]
+
+
+# --- part 2: thermal rates and lean cross-check -------------------------------------------------
+
+
+def test_coolant_rate_is_the_slope_in_degrees_per_minute():
+    times = [0, 800, 1600, 2400]
+    feeds = {"did.COOLANT_TEMP": (times, [80.0 + 0.1 * t / 1000 for t in times])}  # 0.1 degC/s
+    assert point_value("coolant_rate", feeds, 2400) == pytest.approx(6.0)
+    assert _flag("coolant_rate", {"did.COOLANT_TEMP": ([2400], [90.0])}, 2400) == (
+        "insufficient_samples"
+    )
+
+
+def test_oil_temp_rate_is_the_slope_in_degrees_per_minute():
+    times = [0, 5000, 10000]
+    feeds = {"did.ENGINE_OIL_TEMP": (times, [90.0 - 0.05 * t / 1000 for t in times])}
+    assert point_value("oil_temp_rate", feeds, 10000) == pytest.approx(-3.0)
+    assert _flag("oil_temp_rate", {"did.ENGINE_OIL_TEMP": ([10000], [90.0])}, 10000) == (
+        "insufficient_samples"
+    )
+
+
+def test_lean_crosscheck_residual_is_the_lean_angle_minus_the_accel_angle():
+    feeds = {"sensor.lean_angle": ([0], [20.0]), "derived.lateral_accel": ([0], [3.5])}
+    # atan2(3.5, 9.80665) = 19.6415 deg
+    assert point_value("lean_crosscheck_residual", feeds, 0) == pytest.approx(0.35848, abs=1e-5)
+    left = {"sensor.lean_angle": ([0], [-20.0]), "derived.lateral_accel": ([0], [-3.5])}
+    assert point_value("lean_crosscheck_residual", left, 0) == pytest.approx(-0.35848, abs=1e-5)
+    stale = {"sensor.lean_angle": ([0], [20.0]), "derived.lateral_accel": ([0], [3.5])}
+    assert _flag("lean_crosscheck_residual", stale, 5000) == "stale_input"
+    assert resolve_sensor("lean_angle") is None  # not stored: missing_inputs in a real session
+
+
+# --- part 2: stop_event -------------------------------------------------------------------------
+
+
+def _stops(speed: tuple, rpm: tuple):
+    return FORMULAS["stop_event"].fn(env_for("stop_event", {SPEED: speed, RPM: rpm}))
+
+
+def _speed_profile(times: list[int], moving: set[range]) -> tuple:
+    return times, [KMH_36 if any(t in r for r in moving) else 0.0 for t in times]
+
+
+def test_stop_event_duration_is_start_to_the_first_moving_sample():
+    times = list(range(0, 3001, 100))
+    speed = _speed_profile(times, {range(0, 1100), range(2100, 3001)})  # stopped 1100..2000
+    assert _stops(speed, const_series(0, 3000, 100, 1000.0)) == [(2100, 1.0, None)]
+    two = _speed_profile(times, {range(0, 500), range(800, 1500), range(2500, 3001)})
+    assert _stops(two, const_series(0, 3000, 100, 1000.0)) == [(800, 0.3, None), (2500, 1.0, None)]
+
+
+def test_stop_event_needs_the_engine_running_at_the_start():
+    times = list(range(0, 3001, 100))
+    speed = _speed_profile(times, {range(0, 1100), range(2100, 3001)})
+    assert _stops(speed, const_series(0, 3000, 100, 0.0)) == []
+    # the engine starts only during the stop: it did not come to a stop running
+    rpm = ramp(0, 3000, 100, lambda t: 0.0 if t < 1500 else 900.0)
+    assert _stops(speed, rpm) == []
+
+
+def test_stop_event_needs_a_moving_sample_before_the_stop():
+    # standing with the engine running at the start of the data is no stop
+    times = list(range(0, 3001, 100))
+    standing_first = _speed_profile(times, {range(1500, 2000), range(2500, 3001)})
+    assert _stops(standing_first, const_series(0, 3000, 100, 1000.0)) == [(2500, 0.5, None)]
+
+
+def test_stop_event_is_dropped_across_a_gap_in_the_speed_series():
+    limit = 3 * vehicle_catalog.SIGNALS["VEHICLE_SPEED"]["poll_period_ms"]
+    rpm = const_series(0, 4000, 100, 1000.0)
+    gap = ([900, 1000, 1100, 2000, 2100], [KMH_36, 0.0, 0.0, KMH_36, KMH_36])
+    assert _stops(gap, rpm) == []
+    edge = ([900, 1000, 1000 + limit, 1000 + 2 * limit], [KMH_36, 0.0, 0.0, KMH_36])
+    assert _stops(edge, rpm) == [(1000 + 2 * limit, 2 * limit / 1000, None)]
+    # a gap just before the stop: the moving state is not followed across it either
+    before = ([900, 901 + limit, 1000 + limit, 1100 + limit], [KMH_36, 0.0, 0.0, KMH_36])
+    assert _stops(before, rpm) == []
+
+
+def test_stop_event_still_open_at_the_end_yields_nothing():
+    times = list(range(0, 2001, 100))
+    speed = _speed_profile(times, {range(0, 1100)})
+    assert _stops(speed, const_series(0, 2000, 100, 1000.0)) == []
+
+
+def test_stop_event_through_the_engine_has_no_grid_and_checks_the_range():
+    times = list(range(0, 3001, 100))
+    inputs = {
+        SPEED: _speed_profile(times, {range(0, 1100), range(2100, 3001)}),
+        RPM: const_series(0, 3000, 100, 1000.0),
+    }
+    out, evaluation = _outputs(inputs, "stop_event")
+    assert (out.times, out.values, out.flags) == ([2100], [1.0], [None])
+    entry = evaluation.coverage["stop_event"]
+    assert entry["status"] == "computed" and entry["rows"] == 1 and "period_ms" not in entry
+    # the engine applies the defs range to events too: a stop longer than 3600 s
+    long_times = [0, *range(100, 3700_000, 300)]
+    n = len(long_times)
+    end = long_times[-1] + 300
+    long_speed = (long_times + [end], [KMH_36] + [0.0] * (n - 1) + [KMH_36])
+    long_rpm = (long_times + [end], [1000.0] * (n + 1))
+    out, evaluation = _outputs({SPEED: long_speed, RPM: long_rpm}, "stop_event")
+    assert out.values == [None] and out.flags == ["out_of_range"]
+    assert evaluation.coverage["stop_event"]["flag_counts"] == {"out_of_range": 1}
