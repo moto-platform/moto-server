@@ -48,8 +48,18 @@ _IMU_COLUMNS = ("ax_g", "ay_g", "az_g", "gx_dps", "gy_dps", "gz_dps")
 # GPS fields that may be read (never a position). Everything else is refused.
 GPS_ALLOWED_FIELDS = frozenset({"groundSpeed", "speedAccuracy", "headingOfMotion", "fixType"})
 
-# The v4 tester columns of telemetry.parquet that a sensor can map to.
-_TELEMETRY_SENSOR_COLUMNS = ("step_gap_max_ms", "rtt_max_ms", "rtt_nrc78_count")
+# The telemetry.parquet columns that a sensor can map to: the v4 tester columns and the
+# v3 CAN health counters. unanswered_did_count is left out on purpose: the defs sensor counts
+# DIDs that have not answered, the BLE field timed-out requests since boot (summary.py marks
+# ride_unanswered_did_count not_implemented for the same reason).
+_TELEMETRY_SENSOR_COLUMNS = (
+    "step_gap_max_ms",
+    "rtt_max_ms",
+    "rtt_nrc78_count",
+    "can_tx_error_count",
+    "can_rx_error_count",
+    "can_bus_off_count",
+)
 
 
 @dataclass(frozen=True)

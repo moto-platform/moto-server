@@ -3,7 +3,9 @@
 Column names: physical signals as `<defs signal>_<unit>` (e.g. engine_speed_rpm),
 ages as `<signal>_age_ms`, validity as `<signal>_valid` -- see signals.py for the
 naming rules, driven by moto_defs.vehicle_cl250.DIDS units. The version 4 tester
-statistics keep their telemetry.csv names (step_gap_max_ms, ..., rtt_nrc78_count).
+statistics keep their telemetry.csv names (step_gap_max_ms, ..., rtt_nrc78_count); the
+version 3 CAN health fields use the schema field names in snake_case (can_bus_state,
+can_tx_error_count, ..., can_flags; decode.CAN_HEALTH_FIELDS).
 gps.parquet keeps the gps.csv column names, decoded from raw_hex (D-060: speed and
 heading only, no position).
 signals.parquet (D-066 item 4) has one row per vehicle-signal record of signals.csv:
@@ -23,6 +25,7 @@ import pyarrow.parquet as pq
 
 from moto_server import ble_schema, signals
 from moto_server.decode import (
+    CAN_HEALTH_FIELDS,
     GPS_FLAG_COLUMNS,
     GPS_RAW_COLUMNS,
     GPS_SCALED_COLUMNS,
@@ -35,6 +38,7 @@ from moto_server.decode import (
     decode_imu_csv,
     decode_signals_csv,
     decode_telemetry_csv,
+    decoded_can_health_columns,
     decoded_tester_columns,
 )
 
@@ -75,6 +79,10 @@ def build_telemetry_table(
     # integers, null for version 2/3 rows and for sessions recorded before they existed.
     tester = [decoded_tester_columns(row.decoded) for row in rows]
     arrays = {col: pa.array([t[col] for t in tester], type=pa.int64()) for col in V4_EXTRA_HEADER}
+    # Version 3 CAN health, also from the re-decode: null for version 2 rows.
+    health = [decoded_can_health_columns(row.decoded) for row in rows]
+    for col in (csv_column_for_field(f) for f in CAN_HEALTH_FIELDS):
+        arrays[col] = pa.array([h[col] for h in health], type=pa.int64())
     return pa.table({**columns, **arrays})
 
 

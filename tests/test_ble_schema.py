@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from moto_server import ble_schema
-from moto_server.decode import V4_EXTRA_HEADER, csv_column_for_field
+from moto_server.decode import CAN_HEALTH_FIELDS, V4_EXTRA_HEADER, csv_column_for_field
 from moto_server.defs import ble as defs_ble
 
 SCHEMA = ble_schema.load_default_schema()
@@ -207,6 +207,11 @@ def test_accepted_versions_come_from_the_schema():
     raw[0] = 5
     with pytest.raises(ble_schema.DecodeError, match="unsupported telemetry packet version: 5"):
         ble_schema.decode_telemetry(bytes(raw))
+
+
+def test_can_health_fields_exist_in_the_schema():
+    names = {f["name"] for f in SCHEMA["fields"]}
+    assert set(CAN_HEALTH_FIELDS) <= names
 
 
 def test_v4_csv_columns_match_the_schema_tester_fields():

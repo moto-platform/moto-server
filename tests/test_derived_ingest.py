@@ -14,8 +14,9 @@ from moto_server import ble_schema, cli, derived, index
 from moto_server.config import Settings
 from moto_server.decode import IMU_HEADER
 from moto_server.defs import vehicle_derived
+from moto_server.derived import engine
 from moto_server.derived.inputs import SessionInputs, _to_series, _unwrap, resolve_sensor
-from moto_server.ingest import ingest_path
+from moto_server.ingest import ingest_path, rederive_session
 from moto_server.report import render_text
 
 from .conftest import copy_fixture
@@ -304,6 +305,46 @@ def test_ingest_survives_a_summary_failure(
     assert "error" not in result.report["derived"]
 
 
+def test_ingest_evaluates_class_a_once(
+    settings: Settings, imu_vsig_session: Path, monkeypatch: pytest.MonkeyPatch
+):
+    calls = []
+    real = engine.evaluate
+
+    def counting(*args, **kwargs):
+        calls.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(engine, "evaluate", counting)
+    result = ingest_path(imu_vsig_session, settings)
+    assert "error" not in result.report["derived"]
+    assert "error" not in result.report["derived_summary"]
+    assert len(calls) == 1  # derived.parquet and the summaries share one evaluation
+    calls.clear()
+    block, summary_block = rederive_session(settings, result.session_id)
+    assert len(calls) == 1
+    assert block == result.report["derived"] and summary_block == result.report["derived_summary"]
+
+
+def test_a_failed_shared_evaluation_is_recorded_in_both_blocks(
+    settings: Settings, imu_vsig_session: Path, monkeypatch: pytest.MonkeyPatch
+):
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(engine, "evaluate", boom)
+    result = ingest_path(imu_vsig_session, settings)
+
+    assert result.created is True
+    assert result.report["derived"] == {"error": "RuntimeError: boom"}
+    assert result.report["derived_summary"] == {"error": "RuntimeError: boom"}
+    session_dir = settings.sessions_dir / result.session_id
+    assert not (session_dir / "parquet" / "derived.parquet").exists()
+    assert not (session_dir / "parquet" / "derived_summary.parquet").exists()
+    row = index.get_session(settings.index_db_path, result.session_id)
+    assert row is not None and row.has_derived is False
+
+
 # --- index migration ------------------------------------------------------------------------
 
 
@@ -443,3 +484,17 @@ def test_series_helpers_drop_gaps_dedupe_and_unwrap():
     assert series.times == [10, 20, 30] and series.values == [1.0, 2.5, 3.0]
     wrap = 2**32
     assert _unwrap([wrap - 20, wrap - 10, 5, 15]) == [wrap - 20, wrap - 10, wrap + 5, wrap + 15]
+
+
+def test_ride_bus_off_count_is_computed_from_the_stored_can_health(
+    settings: Settings, fixtures_dir: Path
+):
+    # v3_session: can_bus_off_count 0, 0, 1, 1, 1 -> one bus-off event in the ride.
+    result = ingest_path(fixtures_dir / "v3_session", settings)
+    health = result.report["derived_summary"]["records"]["RIDE_ECU_HEALTH"]["signals"]
+    assert health["ride_bus_off_count"] == {
+        "status": "computed",
+        "value": 1.0,
+        "unit": "count",
+        "flag": None,
+    }
