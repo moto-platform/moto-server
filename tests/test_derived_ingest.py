@@ -443,3 +443,17 @@ def test_series_helpers_drop_gaps_dedupe_and_unwrap():
     assert series.times == [10, 20, 30] and series.values == [1.0, 2.5, 3.0]
     wrap = 2**32
     assert _unwrap([wrap - 20, wrap - 10, 5, 15]) == [wrap - 20, wrap - 10, wrap + 5, wrap + 15]
+
+
+def test_ride_bus_off_count_is_computed_from_the_stored_can_health(
+    settings: Settings, fixtures_dir: Path
+):
+    # v3_session: can_bus_off_count 0, 0, 1, 1, 1 -> one bus-off event in the ride.
+    result = ingest_path(fixtures_dir / "v3_session", settings)
+    health = result.report["derived_summary"]["records"]["RIDE_ECU_HEALTH"]["signals"]
+    assert health["ride_bus_off_count"] == {
+        "status": "computed",
+        "value": 1.0,
+        "unit": "count",
+        "flag": None,
+    }

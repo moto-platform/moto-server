@@ -15,9 +15,6 @@ from .derived_helpers import FakeInputs, const_series, ramp
 
 SPECS = vehicle_derived.SIGNALS
 CLASS_B = [name for name, spec in SPECS.items() if spec["class"] == "B"]
-# The server stores no parquet column for these sensors (missing_inputs in practice).
-UNSTORED_SENSORS = {"can_bus_off_count"}
-
 SPEED_MPS = "sensor.gps_ground_speed"
 FIX = "sensor.gps_fix_type"
 RPM = "did.ENGINE_SPEED"
@@ -64,10 +61,7 @@ def test_every_summary_is_a_ready_class_b_signal_with_declared_resolvable_inputs
                 assert key in SPECS, inp
             else:
                 assert kind == "sensor" and key in vehicle_derived.SENSORS, inp
-                if key in UNSTORED_SENSORS:
-                    assert resolve_sensor(key) is None
-                else:
-                    assert resolve_sensor(key) is not None, f"{inp} has no parquet column"
+                assert resolve_sensor(key) is not None, f"{inp} has no parquet column"
         for axis in spec.get("bins") or []:
             assert axis["input"] in spec["inputs"]
         assert spec["record"] in vehicle_derived.RIDE_SUMMARY_RECORDS
