@@ -72,7 +72,7 @@ $MOTO_DATA_DIR/
   index.sqlite                     # one row per ingested session (has_imu, has_gps, has_vehicle_signals, has_derived)
   sessions/<session_id>/
     raw/                           # the uploaded files, verbatim
-    parquet/telemetry.parquet      # decoded telemetry, one row per BLE packet (incl. tester stats)
+    parquet/telemetry.parquet      # decoded telemetry, one row per BLE packet (incl. CAN health, tester stats)
     parquet/imu.parquet            # decoded IMU samples (if imu.csv was present)
     parquet/gps.parquet            # decoded GPS blocks (if gps.csv was present)
     parquet/signals.parquet        # vehicle-signal records (if signals.csv was present)
@@ -93,6 +93,11 @@ Telemetry version 4 (D-058) adds eight tester-statistics columns at the end of
 are stored under the same names as nullable integer Parquet columns, decoded from
 `raw_hex` (null for version 2/3 rows). A `telemetry.csv` recorded before them (21 or
 35 columns) is still accepted and gets null columns.
+
+The version 3 CAN health fields are stored too, also decoded from `raw_hex`, as nullable
+integers under the schema field names in snake_case: `can_bus_state`, `can_tx_error_count`,
+`can_rx_error_count`, `can_bus_off_count`, `unanswered_did_count`, `can_flags` (the csv calls
+the error counters `can_tec`/`can_rec`). They are null for version 2 rows.
 
 ### Validation report
 
@@ -210,8 +215,8 @@ C across rides, D server only). Until rt-core exists the Python reference in
   through `SENSORS[name]["phase0"]` (`ble.imuBlock.ax` -> `imu.parquet` `ax_g`, converted to
   m/s2 with standard gravity; `ble.gpsBlock.*` -> `gps.parquet`, speed, speed accuracy,
   heading of motion and fix type only, never a position); `const.<name>` is
-  `moto_defs.vehicle_constants`. Sensors the server does not store (e.g. `lean_angle`, the
-  CAN counters: telemetry.parquet keeps only the tester columns) are `missing_inputs`.
+  `moto_defs.vehicle_constants`. Sensors the server does not store (e.g. `lean_angle`) are
+  `missing_inputs`; the tester and CAN health counters come from `telemetry.parquet`.
 - `engine.py`: topological order over `derived.*` inputs; the output grid is the signal's
   `period_ms` from the span where all inputs exist. An input counts while its age is within
   its `stale_after_ms` (the signal's own for `did.*`, `SENSORS` for sensors, the producer's for
@@ -288,8 +293,7 @@ D-025; sensors: `SENSORS` `stale_after_ms`), so a gap adds nothing. A value outs
   report's `outside_s`.
 - `ride_bus_off_count` sums the increments of the cumulative counter between consecutive
   samples (the first sample is the baseline); a decrease means the node restarted and the new
-  value is the increment. The server does not store this sensor yet (telemetry.parquet keeps
-  only the tester columns), so it is `missing_inputs` on real sessions until it does.
+  value is the increment. It reads `can_bus_off_count` of `telemetry.parquet`.
   `ride_distance_gps` also needs `sensor.gps_fix_type` (declared input) next to the speed.
 - Choices the defs leave open (assumptions of this reference): `ride_bus_off_count` counts
   only bus-offs seen within the session and treats a decrease as a restart; `ride_ltft_mean` is

@@ -72,6 +72,18 @@ V4_EXTRA_HEADER = [
     "rtt_nrc78_count",
 ]
 V4_HEADER = V3_HEADER + V4_EXTRA_HEADER
+# The version 3 CAN health fields (schema `canHealth`). telemetry.parquet stores them under
+# the schema field names in snake_case (can_tx_error_count, not the csv's can_tec), so the
+# derived-signal sensors (moto_defs.vehicle_derived.SENSORS, `ble.telemetry.<field>`) find
+# them; test_ble_schema checks that every name exists in the schema.
+CAN_HEALTH_FIELDS = (
+    "canBusState",
+    "canTxErrorCount",
+    "canRxErrorCount",
+    "canBusOffCount",
+    "unansweredDidCount",
+    "canFlags",
+)
 
 IMU_HEADER = [
     "rx_utc_iso",
@@ -199,6 +211,12 @@ def decoded_tester_columns(decoded: dict[str, Any] | None) -> dict[str, int | No
         csv_column_for_field(k): v for k, v in ((decoded or {}).get("tester_stats") or {}).items()
     }
     return {col: stats.get(col) for col in V4_EXTRA_HEADER}
+
+
+def decoded_can_health_columns(decoded: dict[str, Any] | None) -> dict[str, int | None]:
+    """The version 3 CAN health columns of a decoded packet (all None for version 2)."""
+    raw = (decoded or {}).get("raw") or {}
+    return {csv_column_for_field(f): raw.get(f) for f in CAN_HEALTH_FIELDS}
 
 
 def _to_int(value: str) -> int | None:

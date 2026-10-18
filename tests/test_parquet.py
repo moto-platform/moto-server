@@ -6,6 +6,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from moto_server.config import Settings
+from moto_server.decode import CAN_HEALTH_FIELDS, csv_column_for_field
 from moto_server.ingest import ingest_path
 
 
@@ -116,4 +117,36 @@ def test_old_session_without_tester_columns_gets_null_columns(
     table = pq.read_table(session_dir / "parquet" / "telemetry.parquet")
     for column in TESTER_COLUMNS:
         assert pa.types.is_integer(table.schema.field(column).type), column
+        assert table.column(column).null_count == table.num_rows, column
+
+
+CAN_HEALTH_COLUMNS = [csv_column_for_field(f) for f in CAN_HEALTH_FIELDS]
+
+
+def test_telemetry_parquet_has_the_can_health_columns(settings: Settings, fixtures_dir: Path):
+    # The derived-signal sensors read these (vehicle_derived.SENSORS, ble.telemetry.<field>).
+    assert CAN_HEALTH_COLUMNS == [
+        "can_bus_state",
+        "can_tx_error_count",
+        "can_rx_error_count",
+        "can_bus_off_count",
+        "unanswered_did_count",
+        "can_flags",
+    ]
+    result = ingest_path(fixtures_dir / "v3_session", settings)
+    session_dir = settings.sessions_dir / result.session_id
+    table = pq.read_table(session_dir / "parquet" / "telemetry.parquet")
+    for column in CAN_HEALTH_COLUMNS:
+        assert pa.types.is_integer(table.schema.field(column).type), column
+    assert table.column("can_tx_error_count").to_pylist() == [0, 100, 255, 255, 20]
+    assert table.column("can_rx_error_count").to_pylist() == [0, 50, 255, 255, 15]
+    assert table.column("can_bus_off_count").to_pylist() == [0, 0, 1, 1, 1]
+    assert table.column("unanswered_did_count").to_pylist() == [0, 0, 2, 2, 2]
+
+
+def test_version_2_rows_have_null_can_health_columns(settings: Settings, fixtures_dir: Path):
+    result = ingest_path(fixtures_dir / "v2_session", settings)
+    session_dir = settings.sessions_dir / result.session_id
+    table = pq.read_table(session_dir / "parquet" / "telemetry.parquet")
+    for column in CAN_HEALTH_COLUMNS:
         assert table.column(column).null_count == table.num_rows, column
