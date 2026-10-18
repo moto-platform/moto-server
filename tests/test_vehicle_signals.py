@@ -330,6 +330,7 @@ def test_meta_block_version_is_optional_and_checked(
     meta["session_id"] = "20260115-160001-c9d1"
     (newer / "meta.json").write_text(json.dumps(meta))
     report = ingest_path(newer, settings).report
+    assert report["status"] == "fail"
     assert any("vehicle_signal_block_version" in reason for reason in report["reasons"])
 
 
