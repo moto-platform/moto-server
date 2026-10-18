@@ -8,6 +8,7 @@ and ignores the app's decoded columns except for a consistency check."
 
 from __future__ import annotations
 
+import csv
 from pathlib import Path
 from typing import Any
 
@@ -146,8 +147,109 @@ _VSIG_VALID = VSIG_VALID
 _VSIG_NEGATIVE_RESPONSE = VSIG_NEGATIVE_RESPONSE
 
 
+def _vsig_gap_events(events_csv: Path) -> tuple[list[tuple[int, int]], list[str]]:
+    """The `vsig_gap` events of events.csv as (seq, missing) pairs, plus unparsable details."""
+    gaps: list[tuple[int, int]] = []
+    malformed: list[str] = []
+    if not events_csv.exists():
+        return gaps, malformed
+    with events_csv.open(newline="") as fh:
+        for record in csv.DictReader(fh):
+            if record.get("event") != "vsig_gap":
+                continue
+            detail = record.get("detail") or ""
+            try:
+                parts = dict(item.split("=", 1) for item in detail.split(";"))
+                gaps.append((int(parts["seq"]), int(parts["missing"])))
+            except (KeyError, ValueError):
+                malformed.append(detail)
+    return gaps, malformed
+
+
+def _vsig_consistency_issues(
+    blocks: list[list[Any]],
+    recomputed_lost: dict[int, int],
+    lost_total: float,
+    block_count: int,
+    record_count: int,
+    lost_percent: float,
+    events_csv: Path,
+    summary: dict[str, Any],
+) -> list[str]:
+    """Cross-checks the app's own figures (E-18 item 4) against the re-derived ones.
+
+    The three places the app reports vehicle-signal loss must agree with each other
+    and with `block_seq` (vehicleSignalBlock.sequenceRule): the `lost_since_prev`
+    column of signals.csv, the `vsig_gap` events of events.csv and the
+    `vehicle_signal_*` keys of summary.json. Keys the app did not write are skipped.
+    """
+    issues: list[str] = []
+
+    # lost_since_prev: carried on the first row of a block only (0 on the others, the
+    # session_recorder contract) and equal to the block_seq gap.
+    app_lost_by_seq: dict[int, int] = {}
+    for block in blocks:
+        seq = next((r.block_seq for r in block if r.block_seq is not None), None)
+        if seq is None:
+            continue
+        values = [r.app_lost_since_prev or 0 for r in block]
+        if any(values[1:]):
+            issues.append(f"block seq {seq}: lost_since_prev is non-zero beyond the first row")
+        app_lost_by_seq[seq] = values[0]
+    for seq, app_lost in app_lost_by_seq.items():
+        expected = recomputed_lost.get(seq)
+        if expected is not None and app_lost != expected:
+            issues.append(
+                f"block seq {seq}: lost_since_prev {app_lost} but block_seq gap is {expected}"
+            )
+
+    # vsig_gap events: exactly one per block that follows a gap, with the same count.
+    events, malformed = _vsig_gap_events(events_csv)
+    for detail in malformed:
+        issues.append(f"vsig_gap event with unparsable detail {detail!r}")
+    events_by_seq: dict[int, int] = {}
+    for seq, missing in events:
+        if seq in events_by_seq:
+            issues.append(f"more than one vsig_gap event for block seq {seq}")
+        events_by_seq[seq] = missing
+    for seq, expected in recomputed_lost.items():
+        if expected and seq not in events_by_seq:
+            issues.append(f"no vsig_gap event for block seq {seq} ({expected} block(s) lost)")
+        elif seq in events_by_seq and events_by_seq[seq] != expected:
+            issues.append(
+                f"vsig_gap event for block seq {seq} says missing={events_by_seq[seq]} "
+                f"but block_seq gap is {expected}"
+            )
+    for seq in events_by_seq:
+        if seq not in recomputed_lost:
+            issues.append(f"vsig_gap event for block seq {seq} that is not in signals.csv")
+
+    # summary.json vehicle_signal_* keys.
+    expected_summary = {
+        "vehicle_signal_block_count": block_count,
+        "vehicle_signal_record_count": record_count,
+        "vehicle_signal_lost_blocks": lost_total,
+    }
+    for key, expected in expected_summary.items():
+        if key in summary and summary[key] != expected:
+            issues.append(f"summary {key} is {summary[key]!r} but signals.csv gives {expected}")
+    reported = summary.get("vehicle_signal_lost_percent")
+    if reported is not None and (
+        not isinstance(reported, int | float) or abs(reported - lost_percent) > 1e-3
+    ):
+        issues.append(
+            f"summary vehicle_signal_lost_percent is {reported!r} but signals.csv gives "
+            f"{lost_percent:.4f}"
+        )
+    return issues
+
+
 def _vehicle_signals_summary(
-    signals_csv: Path, schema: dict[str, Any], meta: dict[str, Any]
+    signals_csv: Path,
+    schema: dict[str, Any],
+    meta: dict[str, Any],
+    events_csv: Path | None = None,
+    summary: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Vehicle-signal block statistics (D-066 item 4), all re-derived from did + raw.
 
@@ -160,13 +262,16 @@ def _vehicle_signals_summary(
     blocks = group_signal_blocks(rows)
 
     lost_total = 0
+    recomputed_lost: dict[int, int] = {}  # block_seq -> blocks lost just before it
     prev_seq = None
     for block in blocks:
         seq = next((r.block_seq for r in block if r.block_seq is not None), None)
         if seq is None:
             continue
         if prev_seq is not None:
-            lost_total += (seq - prev_seq - 1) % 256
+            lost = (seq - prev_seq - 1) % 256
+            lost_total += lost
+            recomputed_lost[seq] = lost
         prev_seq = seq
 
     per_did: dict[int, dict[str, Any]] = {}
@@ -207,11 +312,23 @@ def _vehicle_signals_summary(
 
     block_count = len(blocks)
     total_expected = lost_total + block_count
+    lost_percent = (lost_total / total_expected * 100) if total_expected else 0.0
+    issues = _vsig_consistency_issues(
+        blocks,
+        recomputed_lost,
+        lost_total,
+        block_count,
+        len(rows),
+        lost_percent,
+        events_csv or Path("events.csv"),
+        summary or {},
+    )
     return {
         "block_count": block_count,
         "record_count": len(rows),
         "lost_blocks": lost_total,
-        "lost_percent": (lost_total / total_expected * 100) if total_expected else 0.0,
+        "lost_percent": lost_percent,
+        "consistency_issues": issues,
         "total_records": max((r.total_records or 0 for r in rows), default=0),
         "decode_error_rows": [r.row_index for r in rows if r.decode_error],
         "mismatch_rows": [r.row_index for r in rows if r.mismatches],
@@ -220,6 +337,21 @@ def _vehicle_signals_summary(
         "unknown_dids": [k for k, v in signals_by_did.items() if v["name"] is None],
         "meta_block_version": meta.get("vehicle_signal_block_version"),
     }
+
+
+def _block_version_problem(meta: dict[str, Any], key: str, pinned: int) -> str | None:
+    """Reason text when meta.json declares a block version the pinned defs do not decode."""
+    if key not in meta or meta[key] is None:
+        return None  # a session recorded before the block existed
+    value = meta[key]
+    if isinstance(value, bool) or not isinstance(value, int):
+        return f"meta {key} {value!r} is not an integer"
+    if value != pinned:
+        return (
+            f"meta {key} {value} is not supported: the pinned defs "
+            f"{defs_version()} decode version {pinned} only"
+        )
+    return None
 
 
 def build_report(
@@ -401,7 +533,9 @@ def build_report(
 
     signals_csv = session_dir / "signals.csv"
     vsig_summary = (
-        _vehicle_signals_summary(signals_csv, schema, meta) if signals_csv.exists() else None
+        _vehicle_signals_summary(signals_csv, schema, meta, session_dir / "events.csv", summary)
+        if signals_csv.exists()
+        else None
     )
 
     status = "ok"
@@ -471,12 +605,21 @@ def build_report(
             )
         if vsig_summary["lost_blocks"]:
             warn(f"{vsig_summary['lost_blocks']} vehicle-signal block(s) lost")
-        meta_version = vsig_summary["meta_block_version"]
-        if meta_version is not None and meta_version != defs_ble.VSIG_BLOCK_VERSION:
+        if vsig_summary["consistency_issues"]:
             warn(
-                f"meta vehicle_signal_block_version {meta_version} differs from the pinned "
-                f"defs version {defs_ble.VSIG_BLOCK_VERSION}"
+                f"{len(vsig_summary['consistency_issues'])} vehicle-signal loss figure(s) "
+                f"disagree: {'; '.join(vsig_summary['consistency_issues'][:3])}"
             )
+    elif summary.get("vehicle_signal_block_count"):
+        warn("summary.json counts vehicle-signal blocks but the session has no signals.csv")
+    for key, pinned in (
+        ("gps_block_version", defs_ble.GPS_BLOCK_VERSION),
+        ("vehicle_signal_block_version", defs_ble.VSIG_BLOCK_VERSION),
+    ):
+        problem = _block_version_problem(meta, key, pinned)
+        if problem:
+            status = "fail"
+            reasons.append(problem)
     if not reasons:
         reasons.append("no issues found")
 
