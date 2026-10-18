@@ -11,6 +11,9 @@ store_summary() does the same for the class-B per-ride summaries (summary.py): i
 session_id, record, did, signal, cell, bin0_low, bin0_high, bin1_low, bin1_high, value, unit,
 valid, flag) and returns the `derived_summary` block of report.json. In Phase 0 one stored
 session is one ride.
+
+store_all() runs both and evaluates the class-A signals once: the summaries reuse that
+evaluation instead of computing it again.
 """
 
 from __future__ import annotations
@@ -98,9 +101,13 @@ def _table(session_id: str, outputs: list[engine.SignalOutput]) -> pa.Table:
     )
 
 
-def derive_session(session_dir: Path, session_id: str) -> DeriveResult:
-    """Evaluates all derived signals of the session stored under `session_dir`."""
-    evaluation = engine.evaluate(SessionInputs(session_dir))
+def derive_session(
+    session_dir: Path, session_id: str, evaluation: engine.Evaluation | None = None
+) -> DeriveResult:
+    """Evaluates all derived signals of the session stored under `session_dir`, or uses
+    `evaluation` when the caller already has it."""
+    if evaluation is None:
+        evaluation = engine.evaluate(SessionInputs(session_dir))
     statuses: dict[str, int] = {}
     for entry in evaluation.coverage.values():
         statuses[entry["status"]] = statuses.get(entry["status"], 0) + 1
@@ -114,13 +121,15 @@ def derive_session(session_dir: Path, session_id: str) -> DeriveResult:
     return DeriveResult(_table(session_id, evaluation.outputs), coverage)
 
 
-def store(session_dir: Path, session_id: str) -> tuple[dict[str, Any], bool]:
+def store(
+    session_dir: Path, session_id: str, evaluation: engine.Evaluation | None = None
+) -> tuple[dict[str, Any], bool]:
     """Derives and writes derived.parquet (removed when there is no row). Returns the
     `derived` report block and whether the file exists. Any exception becomes
     {"error": ...} (and no file): derived signals never fail an ingest."""
     path = derived_path(session_dir)
     try:
-        result = derive_session(session_dir, session_id)
+        result = derive_session(session_dir, session_id, evaluation)
         if result.table.num_rows:
             path.parent.mkdir(parents=True, exist_ok=True)
             pq.write_table(result.table, path)
@@ -172,11 +181,19 @@ def _summary_table(session_id: str, rows: list[summary.SummaryRow]) -> pa.Table:
     )
 
 
-def summarize_session(session_dir: Path, session_id: str) -> SummaryResult:
-    """Evaluates the class-B summaries of the session stored under `session_dir` (the
-    class-A signals are evaluated first, in memory)."""
-    inputs = SessionInputs(session_dir)
-    evaluation = summary.evaluate(inputs, engine.evaluate(inputs))
+def summarize_session(
+    session_dir: Path,
+    session_id: str,
+    inputs: SessionInputs | None = None,
+    class_a: engine.Evaluation | None = None,
+) -> SummaryResult:
+    """Evaluates the class-B summaries of the session stored under `session_dir`. The
+    class-A evaluation is computed first, in memory, unless the caller passes it."""
+    if inputs is None:
+        inputs = SessionInputs(session_dir)
+    if class_a is None:
+        class_a = engine.evaluate(inputs)
+    evaluation = summary.evaluate(inputs, class_a)
     statuses: dict[str, int] = {}
     records: dict[str, dict[str, Any]] = {
         name: {"did": did, "signals": {}}
@@ -194,13 +211,18 @@ def summarize_session(session_dir: Path, session_id: str) -> SummaryResult:
     return SummaryResult(_summary_table(session_id, evaluation.rows), coverage)
 
 
-def store_summary(session_dir: Path, session_id: str) -> tuple[dict[str, Any], bool]:
+def store_summary(
+    session_dir: Path,
+    session_id: str,
+    inputs: SessionInputs | None = None,
+    class_a: engine.Evaluation | None = None,
+) -> tuple[dict[str, Any], bool]:
     """Writes parquet/derived_summary.parquet (removed when there is no row). Returns the
     `derived_summary` report block and whether the file exists. Any exception becomes
     {"error": ...} (and no file): summaries never fail an ingest."""
     path = summary_path(session_dir)
     try:
-        result = summarize_session(session_dir, session_id)
+        result = summarize_session(session_dir, session_id, inputs, class_a)
         if result.table.num_rows:
             path.parent.mkdir(parents=True, exist_ok=True)
             pq.write_table(result.table, path)
@@ -210,3 +232,21 @@ def store_summary(session_dir: Path, session_id: str) -> tuple[dict[str, Any], b
     except Exception as exc:
         path.unlink(missing_ok=True)
         return {"error": f"{type(exc).__name__}: {exc}"}, False
+
+
+def store_all(session_dir: Path, session_id: str) -> tuple[dict[str, Any], bool, dict[str, Any]]:
+    """store() and store_summary() over one class-A evaluation. Returns the `derived` block,
+    whether derived.parquet exists and the `derived_summary` block. A failed shared
+    evaluation becomes the same {"error": ...} in both blocks (and neither file), as when
+    each one evaluated on its own."""
+    try:
+        inputs = SessionInputs(session_dir)
+        class_a = engine.evaluate(inputs)
+    except Exception as exc:
+        derived_path(session_dir).unlink(missing_ok=True)
+        summary_path(session_dir).unlink(missing_ok=True)
+        error = {"error": f"{type(exc).__name__}: {exc}"}
+        return error, False, dict(error)
+    block, has_derived = store(session_dir, session_id, class_a)
+    summary_block, _ = store_summary(session_dir, session_id, inputs, class_a)
+    return block, has_derived, summary_block
