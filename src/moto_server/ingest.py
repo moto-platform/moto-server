@@ -180,11 +180,11 @@ def ingest_path(
 
         parquet.write_session_parquet(session_dir, session_id, schema)
 
-        # Derived signals never fail an ingest: an exception is recorded as derived.error.
-        derived_block, has_derived = derived.store(session_dir, session_id)
+        # Derived signals and the class-B per-ride summaries never fail an ingest: an
+        # exception is recorded as derived.error / derived_summary.error.
+        derived_block, has_derived, summary_block = derived.store_all(session_dir, session_id)
         report_dict["derived"] = derived_block
-        # Same for the class-B per-ride summaries: derived_summary.error, never a failed ingest.
-        report_dict["derived_summary"], _ = derived.store_summary(session_dir, session_id)
+        report_dict["derived_summary"] = summary_block
         (session_dir / "report.json").write_text(json.dumps(report_dict, indent=2) + "\n")
 
         index.upsert_session(
@@ -221,8 +221,7 @@ def rederive_session(settings: Settings, session_id: str) -> tuple[dict[str, Any
     if not report_path.is_file():
         raise FileNotFoundError(f"unknown session: {session_id}")
 
-    block, has_derived = derived.store(session_dir, session_id)
-    summary_block, _ = derived.store_summary(session_dir, session_id)
+    block, has_derived, summary_block = derived.store_all(session_dir, session_id)
     report_dict = json.loads(report_path.read_text())
     report_dict["derived"] = block
     report_dict["derived_summary"] = summary_block
