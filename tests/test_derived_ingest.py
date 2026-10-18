@@ -14,8 +14,9 @@ from moto_server import ble_schema, cli, derived, index
 from moto_server.config import Settings
 from moto_server.decode import IMU_HEADER
 from moto_server.defs import vehicle_derived
+from moto_server.derived import engine
 from moto_server.derived.inputs import SessionInputs, _to_series, _unwrap, resolve_sensor
-from moto_server.ingest import ingest_path
+from moto_server.ingest import ingest_path, rederive_session
 from moto_server.report import render_text
 
 from .conftest import copy_fixture
@@ -302,6 +303,46 @@ def test_ingest_survives_a_summary_failure(
     on_disk = json.loads((session_dir / "report.json").read_text())
     assert on_disk["derived_summary"] == {"error": "RuntimeError: boom"}
     assert "error" not in result.report["derived"]
+
+
+def test_ingest_evaluates_class_a_once(
+    settings: Settings, imu_vsig_session: Path, monkeypatch: pytest.MonkeyPatch
+):
+    calls = []
+    real = engine.evaluate
+
+    def counting(*args, **kwargs):
+        calls.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(engine, "evaluate", counting)
+    result = ingest_path(imu_vsig_session, settings)
+    assert "error" not in result.report["derived"]
+    assert "error" not in result.report["derived_summary"]
+    assert len(calls) == 1  # derived.parquet and the summaries share one evaluation
+    calls.clear()
+    block, summary_block = rederive_session(settings, result.session_id)
+    assert len(calls) == 1
+    assert block == result.report["derived"] and summary_block == result.report["derived_summary"]
+
+
+def test_a_failed_shared_evaluation_is_recorded_in_both_blocks(
+    settings: Settings, imu_vsig_session: Path, monkeypatch: pytest.MonkeyPatch
+):
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(engine, "evaluate", boom)
+    result = ingest_path(imu_vsig_session, settings)
+
+    assert result.created is True
+    assert result.report["derived"] == {"error": "RuntimeError: boom"}
+    assert result.report["derived_summary"] == {"error": "RuntimeError: boom"}
+    session_dir = settings.sessions_dir / result.session_id
+    assert not (session_dir / "parquet" / "derived.parquet").exists()
+    assert not (session_dir / "parquet" / "derived_summary.parquet").exists()
+    row = index.get_session(settings.index_db_path, result.session_id)
+    assert row is not None and row.has_derived is False
 
 
 # --- index migration ------------------------------------------------------------------------
