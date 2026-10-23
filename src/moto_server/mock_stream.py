@@ -14,6 +14,8 @@ import time
 from collections.abc import AsyncIterator
 from pathlib import Path
 
+from moto_server.can_codec import Signal, e2e, encode, platform_messages, unpack_raw
+from moto_server.defs import vehicle_cl250
 from moto_server.schemas.stream import (
     BusStatsDto,
     CanFrameDto,
@@ -21,13 +23,31 @@ from moto_server.schemas.stream import (
     StreamBatchDto,
 )
 
+# Engine signals that carry a matching <NAME>_VALID bit in VehicleEngine.
+_ENGINE_SIGNALS = ("ENGINE_SPEED", "BATTERY_VOLTAGE", "COOLANT_TEMP", "THROTTLE_POS")
+
+
+def _usable_states(signal: Signal) -> set[int]:
+    """Enum values of a *_STATE / *_VALID signal that mean the value is usable."""
+    return {signal.choices[n] for n in ("ESTIMATED", "CLAMPED", "VALID") if n in signal.choices}
+
+
+def uds_read_response(did_name: str, physical: float) -> bytes:
+    """ISO-TP single frame carrying a positive ReadDataByIdentifier (0x62) response."""
+    did, length, num, den, offset, *_ = vehicle_cl250.DIDS[did_name]
+    raw = max(0, min((1 << (8 * length)) - 1, round((physical - offset) * den / num)))
+    body = bytes([0x62, did >> 8, did & 0xFF]) + raw.to_bytes(length, "big")
+    frame = bytes([len(body)]) + body
+    return frame + bytes([vehicle_cl250.PADDING_BYTE]) * (8 - len(frame))
+
 
 class MockCanStreamer:
     """Generates realistic CAN frame streams and decoded physical signals."""
 
     def __init__(self, fixture_dir: Path | str | None = None) -> None:
         self.fixture_dir = Path(fixture_dir) if fixture_dir else None
-        self._alive_counter = 0
+        self._messages = platform_messages()
+        self._tx = {name: e2e.TxState() for name in self._messages}
         self._step = 0
         self._peak_bus_load = 0.0
 
@@ -51,162 +71,116 @@ class MockCanStreamer:
         coolant = 82.0 + 4.0 * math.sin(t_sec * 0.05)
         battery = 14.1 + 0.15 * math.sin(t_sec * 0.8)
 
-        # 4-bit monotonic alive counter for E2E
-        self._alive_counter = (self._alive_counter + 1) & 0x0F
-
         frames: list[CanFrameDto] = []
         signals: list[DecodedSignalDto] = []
 
-        # 1. 0x020 EkfLean (8 bytes: Lean Angle, Pitch, Roll Rate, Alive/CRC)
-        # Scale: 0.01 deg/LSB, signed 16-bit
-        lean_raw = int(lean * 100) & 0xFFFF
-        lean_b0 = (lean_raw >> 8) & 0xFF
-        lean_b1 = lean_raw & 0xFF
-        e2e_byte = (self._alive_counter << 4) & 0xF0
-        frames.append(
-            CanFrameDto(
-                timestamp_us=timestamp_us,
-                channel=2,  # Platform CAN
-                id=0x020,
-                is_extended=False,
-                dlc=8,
-                data_hex=f"{lean_b0:02x}{lean_b1:02x}00000000{e2e_byte:02x}1d",
-                rxtx="rx",
-            )
-        )
-        signals.append(
-            DecodedSignalDto(
-                name="LEAN_ANGLE",
-                value=round(lean, 2),
-                unit="deg",
-                timestamp_us=timestamp_us,
-                raw_value=lean_raw,
-                is_valid=True,
-            )
-        )
+        def emit(
+            name: str,
+            physical: dict[str, float],
+            states: dict[str, str],
+            valid: dict[str, str],
+        ) -> None:
+            """Encode a platform message from moto_defs, then report what the frame decodes to.
 
-        # 2. 0x021 VehicleSpeed (8 bytes: Speed km/h, E2E)
-        # Scale: 0.1 km/h/LSB, 16-bit
-        speed_raw = int(speed * 10) & 0xFFFF
-        sp_b0 = (speed_raw >> 8) & 0xFF
-        sp_b1 = speed_raw & 0xFF
-        frames.append(
-            CanFrameDto(
-                timestamp_us=timestamp_us,
-                channel=2,
-                id=0x021,
-                is_extended=False,
-                dlc=8,
-                data_hex=f"{sp_b0:02x}{sp_b1:02x}00000000{e2e_byte:02x}2a",
-                rxtx="rx",
+            ``valid`` maps each reported signal to the VALID bit / STATE field that qualifies it.
+            """
+            msg = self._messages[name]
+            data = encode(msg, physical, states, self._tx[name])
+            frames.append(
+                CanFrameDto(
+                    timestamp_us=timestamp_us,
+                    channel=2,  # Platform CAN
+                    id=msg.frame_id,
+                    is_extended=False,
+                    dlc=msg.length,
+                    data_hex=data.hex(),
+                    rxtx="rx",
+                )
             )
-        )
-        signals.append(
-            DecodedSignalDto(
-                name="VEHICLE_SPEED",
-                value=round(speed, 1),
-                unit="km/h",
-                timestamp_us=timestamp_us,
-                raw_value=speed_raw,
-                is_valid=True,
-            )
-        )
+            raws = unpack_raw(msg, data)
+            for sig_name, qualifier in valid.items():
+                sig = msg.signals[sig_name]
+                is_valid = raws[qualifier] in _usable_states(msg.signals[qualifier])
+                signals.append(
+                    DecodedSignalDto(
+                        name=sig_name,
+                        value=sig.to_physical(raws[sig_name]),
+                        unit=sig.unit,
+                        timestamp_us=timestamp_us,
+                        raw_value=raws[sig_name],
+                        is_valid=is_valid,
+                    )
+                )
 
-        # 3. 0x110 VehicleEngine (8 bytes: RPM, Throttle, ECT, Battery)
-        # RPM scale: 1 RPM/LSB
-        rpm_b0 = (rpm >> 8) & 0xFF
-        rpm_b1 = rpm & 0xFF
-        tps_b = int(throttle * 2.55) & 0xFF
-        ect_b = int(coolant + 40) & 0xFF
-        bat_raw = int(battery * 100) & 0xFFFF
-        bat_b0 = (bat_raw >> 8) & 0xFF
-        bat_b1 = bat_raw & 0xFF
-        frames.append(
-            CanFrameDto(
-                timestamp_us=timestamp_us,
-                channel=2,
-                id=0x110,
-                is_extended=False,
-                dlc=8,
-                data_hex=f"{rpm_b0:02x}{rpm_b1:02x}{tps_b:02x}{ect_b:02x}{bat_b0:02x}{bat_b1:02x}0000",
-                rxtx="rx",
-            )
+        # 0x020 EkfLean: E2E, LEAN_ANGLE with its state and quality
+        emit(
+            "EkfLean",
+            {"LEAN_ANGLE": lean, "LEAN_ANGLE_QUALITY": 100},
+            {"LEAN_ANGLE_STATE": "ESTIMATED"},
+            {"LEAN_ANGLE": "LEAN_ANGLE_STATE"},
         )
-        signals.append(
-            DecodedSignalDto(
-                name="ENGINE_SPEED",
-                value=rpm,
-                unit="rpm",
-                timestamp_us=timestamp_us,
-                raw_value=rpm,
-                is_valid=True,
-            )
+        # 0x021 VehicleSpeed
+        emit(
+            "VehicleSpeed",
+            {"VEHICLE_SPEED": speed, "VEHICLE_SPEED_VALID": 1},
+            {},
+            {"VEHICLE_SPEED": "VEHICLE_SPEED_VALID"},
         )
-        signals.append(
-            DecodedSignalDto(
-                name="THROTTLE_POS",
-                value=round(throttle, 1),
-                unit="%",
-                timestamp_us=timestamp_us,
-                raw_value=tps_b,
-                is_valid=True,
-            )
+        # 0x110 VehicleEngine (not E2E protected)
+        engine_valid = {n: f"{n}_VALID" for n in _ENGINE_SIGNALS}
+        emit(
+            "VehicleEngine",
+            {
+                "ENGINE_SPEED": rpm,
+                "THROTTLE_POS": throttle,
+                "COOLANT_TEMP": coolant,
+                "BATTERY_VOLTAGE": battery,
+                **{f"{n}_VALID": 1 for n in _ENGINE_SIGNALS},
+                "ECU_PRESENT": 1,
+            },
+            {},
+            engine_valid,
         )
-        signals.append(
-            DecodedSignalDto(
-                name="COOLANT_TEMP",
-                value=round(coolant, 1),
-                unit="C",
-                timestamp_us=timestamp_us,
-                raw_value=ect_b,
-                is_valid=True,
-            )
-        )
-        signals.append(
-            DecodedSignalDto(
-                name="BATTERY_VOLTAGE",
-                value=round(battery, 2),
-                unit="V",
-                timestamp_us=timestamp_us,
-                raw_value=bat_raw,
-                is_valid=True,
-            )
-        )
-
-        # 4. Periodic Heartbeat 0x081 (HeartbeatRtCore: state, mode, err_cnt) every 5 ticks (10 Hz)
+        # Periodic rt-core heartbeat every 5 ticks (10 Hz is the nominal heartbeat rate)
         if self._step % 5 == 0:
+            hb = self._messages["HeartbeatRtCore"]
+            hb_data = encode(
+                hb,
+                {"ERROR_COUNT": 0, "UPTIME": int(t_sec)},
+                {"NODE_MODE": "NORMAL"},
+                self._tx["HeartbeatRtCore"],
+            )
             frames.append(
                 CanFrameDto(
                     timestamp_us=timestamp_us,
                     channel=2,
-                    id=0x081,
+                    id=hb.frame_id,
                     is_extended=False,
-                    dlc=8,
-                    data_hex="0100000000000000",
+                    dlc=hb.length,
+                    data_hex=hb_data.hex(),
                     rxtx="rx",
                 )
             )
 
-        # 5. Vehicle UDS Diagnostics Response (29-bit 0x18DAF110) every 10 ticks (5 Hz)
+        # Vehicle UDS response (ISO-TP single frame, positive response 0x62) every 10 ticks
         if self._step % 10 == 0:
-            # UDS 0x62 (positive response to 0x22), DID 0xF40C (Engine RPM)
             frames.append(
                 CanFrameDto(
                     timestamp_us=timestamp_us,
-                    channel=1,  # Vehicle CAN DLC
-                    id=0x18DAF110,
+                    channel=1,  # Vehicle CAN
+                    id=vehicle_cl250.RESPONSE_ID,
                     is_extended=True,
                     dlc=8,
-                    data_hex=f"0462f40c{rpm_b0:02x}{rpm_b1:02x}5555",
+                    data_hex=uds_read_response("ENGINE_SPEED", rpm).hex(),
                     rxtx="rx",
                 )
             )
 
         # Bus load calculation:
-        # Classic CAN frame ~110-128 bits with stuffing. At 500 kbps, 1 frame ≈ 0.23 ms
+        # Classic CAN frame ~110-128 bits with stuffing (~120 bits assumed) at the defs bitrate
         num_frames = len(frames)
         est_bits = num_frames * 120
-        bus_load_pct = min(100.0, round((est_bits / (500000 * 0.02)) * 100, 1))
+        bus_load_pct = min(100.0, round((est_bits / (vehicle_cl250.BITRATE * 0.02)) * 100, 1))
         self._peak_bus_load = max(self._peak_bus_load, bus_load_pct)
 
         stats = BusStatsDto(
@@ -249,7 +223,7 @@ class MockCanStreamer:
                         CanFrameDto(
                             timestamp_us=ts_us,
                             channel=1,
-                            id=0x18DAF110,
+                            id=vehicle_cl250.RESPONSE_ID,
                             is_extended=True,
                             dlc=min(64, len(raw_hex) // 2),
                             data_hex=raw_hex[:16],  # first 8 bytes
@@ -263,7 +237,7 @@ class MockCanStreamer:
                         DecodedSignalDto(
                             name="ENGINE_SPEED",
                             value=float(row["rpm"]),
-                            unit="rpm",
+                            unit=vehicle_cl250.DIDS["ENGINE_SPEED"][5],
                             timestamp_us=ts_us,
                         )
                     )
@@ -272,7 +246,7 @@ class MockCanStreamer:
                         DecodedSignalDto(
                             name="VEHICLE_SPEED",
                             value=float(row["speed_kmh"]),
-                            unit="km/h",
+                            unit=vehicle_cl250.DIDS["VEHICLE_SPEED"][5],
                             timestamp_us=ts_us,
                         )
                     )
@@ -281,7 +255,7 @@ class MockCanStreamer:
                         DecodedSignalDto(
                             name="COOLANT_TEMP",
                             value=float(row["coolant_c"]),
-                            unit="C",
+                            unit=vehicle_cl250.DIDS["COOLANT_TEMP"][5],
                             timestamp_us=ts_us,
                         )
                     )
@@ -290,7 +264,7 @@ class MockCanStreamer:
                         DecodedSignalDto(
                             name="BATTERY_VOLTAGE",
                             value=float(row["battery_v"]),
-                            unit="V",
+                            unit=vehicle_cl250.DIDS["BATTERY_VOLTAGE"][5],
                             timestamp_us=ts_us,
                         )
                     )
