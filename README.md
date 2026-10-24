@@ -60,6 +60,7 @@ All endpoints except `GET /health` require `Authorization: Bearer $MOTO_API_TOKE
 | `POST /sessions` | Multipart field `archive` (a session `.zip`). `201` created, `200` identical re-upload (idempotent), `409` same id/different content, `422` invalid session, `413` over `MOTO_MAX_UPLOAD_MB`. |
 | `GET /sessions` | List ingested sessions from the index. |
 | `GET /sessions/{id}/report` | The session's `report.json`. Add `?format=text` for a human-readable summary. `404` for an unknown id. |
+| `GET /ws/live` (WebSocket) | Live stream for moto-analyzer (D-081). First message `{"type": "hello", "token": "<MOTO_API_TOKEN>"}` within 5 s, optional frame filters `"channels": [1, 2]` and `"ids": [...]`; the token is never put in the URL. Then `{"type": "batch", "payload": StreamBatchDto}` messages and every 5 s `{"type": "heartbeat", "payload": {"source", "dropped", "timestamp_us"}}`. Close `1008` bad hello or token, `1011` no `MOTO_API_TOKEN`. One bounded queue per client: a slow client loses its oldest batches (`dropped`), never blocks the others. |
 
 A session upload is a zip with `meta.json`, `telemetry.csv`, `events.csv`,
 `summary.json` (and optional `imu.csv`, `gps.csv` and `signals.csv`) either at the zip root or inside one
@@ -125,6 +126,7 @@ not change the session status.
 | `MOTO_DATA_DIR` | `./data` | Root of all stored session data and the SQLite index. |
 | `MOTO_API_TOKEN` | *(none)* | Bearer token for every endpoint except `/health`. Protected endpoints return `503` if unset. |
 | `MOTO_MAX_UPLOAD_MB` | `100` | Maximum accepted `POST /sessions` upload size. |
+| `MOTO_LIVE_SOURCE` | `none` | Producer of `/ws/live`: `none` (heartbeats only) or `mock` (synthetic frames built from defs by `mock_stream.py`; the heartbeat says `"source": "mock"`). The real source (rt-core via the Raspi, D-077) is not built yet. |
 
 ## BLE schema
 
