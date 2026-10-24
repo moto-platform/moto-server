@@ -15,7 +15,7 @@ organization; see `moto-vehicle-defs/docs/ARCHITECTURE.md` for the platform pict
 ## Setup
 
 ```bash
-git submodule update --init --recursive   # external/moto-vehicle-defs, pinned to v0.14.0
+git submodule update --init --recursive   # external/moto-vehicle-defs, pinned to v0.18.1
 uv sync                                    # installs runtime + dev dependencies
 ```
 
@@ -344,7 +344,7 @@ moto-rt-core host tests:
 uv run moto-server golden --out <moto-rt-core>/tests/host/vectors   # also python -m moto_server.derived.golden
 ```
 
-- Defs version: the headers record the defs version they were generated from (v0.14.0 now).
+- Defs version: the headers record the defs version they were generated from (v0.18.1 now).
   The expected outputs use that version's derived `stale_after_ms` (the age limit of a
   signal's DID inputs), which changed in v0.14.0, so rt-core's derived-module test needs a
   defs pin with the same derived table (v0.14.0 or later); against v0.13.0 the torque and
