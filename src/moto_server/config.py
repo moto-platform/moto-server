@@ -12,6 +12,7 @@ class Settings:
     data_dir: Path
     api_token: str | None
     max_upload_mb: int
+    live_source: str = "none"
 
     @property
     def max_upload_bytes(self) -> int:
@@ -30,4 +31,10 @@ def load_settings() -> Settings:
     data_dir = Path(os.environ.get("MOTO_DATA_DIR", "./data")).resolve()
     api_token = os.environ.get("MOTO_API_TOKEN") or None
     max_upload_mb = int(os.environ.get("MOTO_MAX_UPLOAD_MB", "100"))
-    return Settings(data_dir=data_dir, api_token=api_token, max_upload_mb=max_upload_mb)
+    live_source = os.environ.get("MOTO_LIVE_SOURCE", "none")
+    return Settings(
+        data_dir=data_dir,
+        api_token=api_token,
+        max_upload_mb=max_upload_mb,
+        live_source=live_source,
+    )

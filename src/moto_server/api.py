@@ -1,22 +1,25 @@
 """FastAPI application: session ingestion + read API.
 
 Bearer token auth (MOTO_API_TOKEN) guards every endpoint except GET /health.
+GET /ws/live (WebSocket) checks the same token in its first "hello" message
+(moto_server.stream); MOTO_LIVE_SOURCE picks its producer ("none" or "mock").
 If MOTO_API_TOKEN is not set, protected endpoints return 503 (the API does
 not silently run open).
 """
 
 from __future__ import annotations
 
+import contextlib
 import hmac
 import json
 import tempfile
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, HTTPException, Request, UploadFile, WebSocket
 from fastapi.responses import JSONResponse, PlainTextResponse
 
-from moto_server import index, report
+from moto_server import index, report, stream
 from moto_server.config import Settings, load_settings
 from moto_server.ingest import InvalidSessionError, SessionConflictError, ingest_path
 
@@ -43,8 +46,17 @@ AuthDep = Depends(require_token)
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
-    app = FastAPI(title="moto-server", version="0.2.0")
-    app.state.settings = settings or load_settings()
+    settings = settings or load_settings()
+    hub = stream.LiveHub(settings.live_source)
+
+    @contextlib.asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        async with stream.running_source(hub):
+            yield
+
+    app = FastAPI(title="moto-server", version="0.2.0", lifespan=lifespan)
+    app.state.settings = settings
+    app.state.live_hub = hub
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -90,6 +102,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if format == "text":
             return PlainTextResponse(report.render_text(report_dict))
         return JSONResponse(content=report_dict)
+
+    @app.websocket("/ws/live")
+    async def ws_live(websocket: WebSocket) -> None:
+        await stream.serve_client(websocket, hub, settings.api_token)
 
     return app
 
