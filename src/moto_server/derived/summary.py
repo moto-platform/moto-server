@@ -133,6 +133,20 @@ NOT_IMPLEMENTED_REASONS: dict[str, str] = {
     "coast_down_rolling_resistance": _input_not_implemented("clutch_state"),
 }
 
+# D-079 health-window signals (defs v0.16.0): each reports one window instance (`window` key in
+# the defs), which needs the window state machine; the reference has none yet.
+_WINDOW_REASON = "definition: D-079 window instance (window state machine not implemented)"
+NOT_IMPLEMENTED_REASONS.update(
+    {
+        name: _WINDOW_REASON
+        for name, spec in vehicle_derived.SIGNALS.items()
+        if spec["class"] == "B"
+        and spec.get("window")
+        and spec["ready_phase0"]
+        and not spec.get("pending_inputs")
+    }
+)
+
 
 class SummaryEnv(Env):
     """The declared inputs of one class-B signal: did/sensor feeds, the valid rows of its
