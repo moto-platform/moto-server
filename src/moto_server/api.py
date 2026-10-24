@@ -16,12 +16,18 @@ import tempfile
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, HTTPException, Request, UploadFile, WebSocket
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, UploadFile, WebSocket
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
 
-from moto_server import index, report, stream
+from moto_server import index, report, series, stream
 from moto_server.config import Settings, load_settings
-from moto_server.ingest import InvalidSessionError, SessionConflictError, ingest_path
+from moto_server.ingest import (
+    SESSION_ID_RE,
+    InvalidSessionError,
+    SessionConflictError,
+    ingest_path,
+)
 
 _UPLOAD_CHUNK_BYTES = 1024 * 1024
 
@@ -57,6 +63,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(title="moto-server", version="0.2.0", lifespan=lifespan)
     app.state.settings = settings
     app.state.live_hub = hub
+
+    if settings.cors_origins:
+        # Opt-in (MOTO_CORS_ORIGINS) for the analyzer in a browser on another origin. The
+        # token travels in the Authorization header, so credentials (cookies) stay off.
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=list(settings.cors_origins),
+            allow_methods=["GET", "POST"],
+            allow_headers=["Authorization", "Content-Type"],
+            allow_credentials=False,
+        )
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -102,6 +119,33 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if format == "text":
             return PlainTextResponse(report.render_text(report_dict))
         return JSONResponse(content=report_dict)
+
+    @app.get("/sessions/{session_id}/series", dependencies=[AuthDep])
+    def get_session_series(
+        session_id: str,
+        settings: SettingsDep,
+        signals: str | None = None,
+        max_points: Annotated[
+            int, Query(ge=series.MIN_MAX_POINTS, le=series.MAX_MAX_POINTS)
+        ] = series.DEFAULT_MAX_POINTS,
+        from_ms: int | None = None,
+        to_ms: int | None = None,
+    ) -> dict:
+        session_dir = settings.sessions_dir / session_id
+        if not SESSION_ID_RE.match(session_id) or not session_dir.is_dir():
+            raise HTTPException(status_code=404, detail=f"unknown session: {session_id}")
+
+        available = series.load_all(session_dir)
+        names: list[str] | None = None
+        if signals is not None:
+            names = list(dict.fromkeys(n.strip() for n in signals.split(",") if n.strip()))
+            bad = [n for n in names if n not in available]
+            if bad or not names:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"unknown or unavailable series: {', '.join(bad) or '(empty list)'}",
+                )
+        return series.build_response(session_id, available, names, max_points, from_ms, to_ms)
 
     @app.websocket("/ws/live")
     async def ws_live(websocket: WebSocket) -> None:

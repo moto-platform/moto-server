@@ -13,6 +13,7 @@ class Settings:
     api_token: str | None
     max_upload_mb: int
     live_source: str = "none"
+    cors_origins: tuple[str, ...] = ()
 
     @property
     def max_upload_bytes(self) -> int:
@@ -32,9 +33,13 @@ def load_settings() -> Settings:
     api_token = os.environ.get("MOTO_API_TOKEN") or None
     max_upload_mb = int(os.environ.get("MOTO_MAX_UPLOAD_MB", "100"))
     live_source = os.environ.get("MOTO_LIVE_SOURCE", "none")
+    cors_origins = tuple(
+        o.strip() for o in os.environ.get("MOTO_CORS_ORIGINS", "").split(",") if o.strip()
+    )
     return Settings(
         data_dir=data_dir,
         api_token=api_token,
         max_upload_mb=max_upload_mb,
         live_source=live_source,
+        cors_origins=cors_origins,
     )
