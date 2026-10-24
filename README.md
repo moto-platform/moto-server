@@ -60,6 +60,7 @@ All endpoints except `GET /health` require `Authorization: Bearer $MOTO_API_TOKE
 | `POST /sessions` | Multipart field `archive` (a session `.zip`). `201` created, `200` identical re-upload (idempotent), `409` same id/different content, `422` invalid session, `413` over `MOTO_MAX_UPLOAD_MB`. |
 | `GET /sessions` | List ingested sessions from the index. |
 | `GET /sessions/{id}/report` | The session's `report.json`. Add `?format=text` for a human-readable summary. `404` for an unknown id. |
+| `GET /sessions/{id}/series` | Downsampled time series for the analyzer oscilloscope/replay. Query: `signals` (comma-separated `did.<NAME>`, `sensor.<name>`, `derived.<signal>`; default all available), `max_points` (10..20000, default 2000; min/max buckets so spikes survive), `from_ms`/`to_ms` (inclusive window relative to `t0_device_ms`, applied before downsampling). Returns `{session_id, t0_device_ms, max_points, series: [{name, kind, unit, points_total, downsampled, t_ms, v}]}`; `t0_device_ms` is the earliest sample of any series of the session, so calls share one time axis. `404` unknown session, `422` unknown series name or `max_points` out of range. Never contains a GPS position. |
 | `GET /ws/live` (WebSocket) | Live stream for moto-analyzer (D-081). First message `{"type": "hello", "token": "<MOTO_API_TOKEN>"}` within 5 s, optional frame filters `"channels": [1, 2]` and `"ids": [...]`; the token is never put in the URL. Then `{"type": "batch", "payload": StreamBatchDto}` messages and every 5 s `{"type": "heartbeat", "payload": {"source", "dropped", "timestamp_us"}}`. Close `1008` bad hello or token, `1011` no `MOTO_API_TOKEN`. One bounded queue per client: a slow client loses its oldest batches (`dropped`), never blocks the others. |
 
 A session upload is a zip with `meta.json`, `telemetry.csv`, `events.csv`,
@@ -126,6 +127,7 @@ not change the session status.
 | `MOTO_DATA_DIR` | `./data` | Root of all stored session data and the SQLite index. |
 | `MOTO_API_TOKEN` | *(none)* | Bearer token for every endpoint except `/health`. Protected endpoints return `503` if unset. |
 | `MOTO_MAX_UPLOAD_MB` | `100` | Maximum accepted `POST /sessions` upload size. |
+| `MOTO_CORS_ORIGINS` | *(empty)* | Comma-separated browser origins allowed to call the API (e.g. `http://localhost:5173` for moto-analyzer). Empty: no CORS middleware. Methods GET/POST, headers Authorization + Content-Type, no credentials. |
 | `MOTO_LIVE_SOURCE` | `none` | Producer of `/ws/live`: `none` (heartbeats only) or `mock` (synthetic frames built from defs by `mock_stream.py`; the heartbeat says `"source": "mock"`). The real source (rt-core via the Raspi, D-077) is not built yet. |
 
 ## BLE schema
