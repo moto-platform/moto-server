@@ -23,7 +23,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from moto_server.defs import vehicle_constants, vehicle_derived
+from moto_server.defs import vehicle_cl250, vehicle_constants, vehicle_derived
 from moto_server.derived.context import (
     FLAG_OUT_OF_RANGE,
     At,
@@ -134,6 +134,7 @@ def _evaluate_one(
     done: Mapping[str, SignalOutput],
     specs: Mapping[str, Mapping[str, Any]],
     sensors: Mapping[str, Mapping[str, Any]],
+    did_limits: Mapping[str, int],
 ) -> tuple[SignalOutput | None, dict[str, Any]]:
     feeds: dict[str, Feed] = {}
     missing: list[str] = []
@@ -156,8 +157,8 @@ def _evaluate_one(
             stale = sensors[key]["stale_after_ms"]
         elif formula.kind == "event":  # events have no stale_after_ms: the D-025 age limit
             stale = did_age_limit_ms(key)
-        else:
-            stale = spec["stale_after_ms"]
+        else:  # D-070 item 2: a DID input is judged by the DID's own stale_after_ms
+            stale = did_limits[key]
         feeds[inp] = Feed(series.times, list(series.values), stale)
     if missing:
         return None, {"status": MISSING_INPUTS, "missing": missing}
@@ -213,11 +214,17 @@ def evaluate(
     specs: Mapping[str, Mapping[str, Any]] | None = None,
     formulas: Mapping[str, Formula] | None = None,
     sensors: Mapping[str, Mapping[str, Any]] | None = None,
+    did_limits: Mapping[str, int] | None = None,
 ) -> Evaluation:
-    """Evaluates every signal of `specs` (default: the pinned defs) over `inputs`."""
+    """Evaluates every signal of `specs` (default: the pinned defs) over `inputs`.
+
+    `did_limits` is the DID table's stale_after_ms per DID name (default: the generated
+    vehicle_cl250.DID_STALE_AFTER_MS), the age limit of every non-event DID input.
+    """
     specs = specs if specs is not None else vehicle_derived.SIGNALS
     formulas = formulas if formulas is not None else FORMULAS
     sensors = sensors if sensors is not None else vehicle_derived.SENSORS
+    did_limits = did_limits if did_limits is not None else vehicle_cl250.DID_STALE_AFTER_MS
 
     result = Evaluation()
     done: dict[str, SignalOutput] = {}
@@ -227,7 +234,7 @@ def evaluate(
         if entry is None:
             try:
                 output, entry = _evaluate_one(
-                    name, spec, formulas[name], inputs, done, specs, sensors
+                    name, spec, formulas[name], inputs, done, specs, sensors, did_limits
                 )
             except Exception as exc:  # one failing formula must not stop the others
                 output, entry = None, {"status": ERROR, "message": f"{type(exc).__name__}: {exc}"}
