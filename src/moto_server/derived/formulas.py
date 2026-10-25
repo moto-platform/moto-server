@@ -31,7 +31,6 @@ from moto_server.derived.context import (
     At,
     Env,
     InputInvalid,
-    did_age_limit_ms,
 )
 from moto_server.derived.inputs import STANDARD_GRAVITY_MPS2
 
@@ -559,10 +558,10 @@ def stop_event(env: Env) -> list[EventRow]:
     latest engine speed sample (fresh) is above 0; it ends at the first later speed sample
     above 0. The value is the duration in s and the row time the end time. Standing at the
     start of the data is no stop (the vehicle never came to it). A gap in the speed samples
-    above the speed DID's age limit ends both the stop and the "moving" state, so neither
+    above the speed DID's own stale_after_ms ends both the stop and the "moving" state, so neither
     is followed across it; a stop still open at the end of the data yields no event."""
     speed = env.feed(_SPEED)
-    limit = did_age_limit_ms(_SPEED.removeprefix("did."))
+    limit = speed.stale_after_ms  # the speed DID's own stale_after_ms (D-087)
     events: list[EventRow] = []
     start: int | None = None
     previous: int | None = None

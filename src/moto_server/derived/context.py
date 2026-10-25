@@ -12,24 +12,12 @@ from __future__ import annotations
 from bisect import bisect_right
 from dataclasses import dataclass
 
-from moto_server.defs import vehicle_catalog
 from moto_server.derived.inputs import constant
 
 FLAG_STALE_INPUT = "stale_input"
 FLAG_INVALID_INPUT = "invalid_input"
 FLAG_INSUFFICIENT_SAMPLES = "insufficient_samples"
 FLAG_OUT_OF_RANGE = "out_of_range"
-
-# D-025: a DID is considered gone after this many of its own poll periods without a sample.
-# Stands in for the DID table's stale_after_ms, which moto_defs' Python modules do not
-# export; used only where a signal has no stale_after_ms of its own (events). It can be a
-# little wider than the table value (VEHICLE_SPEED keeps 300 ms, D-048, vs 3 x 110 ms).
-DID_AGE_LIMIT_POLLS = 3
-
-
-def did_age_limit_ms(did: str) -> int:
-    """DID_AGE_LIMIT_POLLS x poll_period_ms of the DID in the generated vehicle catalog."""
-    return DID_AGE_LIMIT_POLLS * vehicle_catalog.SIGNALS[did]["poll_period_ms"]
 
 
 class InputInvalid(Exception):

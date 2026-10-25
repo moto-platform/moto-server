@@ -6,7 +6,7 @@ import math
 
 import pytest
 
-from moto_server.defs import vehicle_catalog, vehicle_constants, vehicle_derived
+from moto_server.defs import vehicle_catalog, vehicle_cl250, vehicle_constants, vehicle_derived
 from moto_server.derived import engine
 from moto_server.derived.context import InputInvalid
 from moto_server.derived.formulas import FORMULAS
@@ -553,7 +553,7 @@ def test_stop_event_needs_a_moving_sample_before_the_stop():
 
 
 def test_stop_event_is_dropped_across_a_gap_in_the_speed_series():
-    limit = 3 * vehicle_catalog.SIGNALS["VEHICLE_SPEED"]["poll_period_ms"]
+    limit = vehicle_cl250.DID_STALE_AFTER_MS["VEHICLE_SPEED"]  # 300 ms (D-087)
     rpm = const_series(0, 4000, 100, 1000.0)
     gap = ([900, 1000, 1100, 2000, 2100], [KMH_36, 0.0, 0.0, KMH_36, KMH_36])
     assert _stops(gap, rpm) == []
@@ -562,6 +562,17 @@ def test_stop_event_is_dropped_across_a_gap_in_the_speed_series():
     # a gap just before the stop: the moving state is not followed across it either
     before = ([900, 901 + limit, 1000 + limit, 1100 + limit], [KMH_36, 0.0, 0.0, KMH_36])
     assert _stops(before, rpm) == []
+
+
+def test_stop_event_judges_the_speed_by_its_own_limit_not_three_polls():
+    # D-087: 3 x poll (330 ms) is within the old rule but beyond the DID's own 300 ms
+    own = vehicle_cl250.DID_STALE_AFTER_MS["VEHICLE_SPEED"]
+    three_polls = 3 * vehicle_catalog.SIGNALS["VEHICLE_SPEED"]["poll_period_ms"]
+    assert own < three_polls
+    rpm = const_series(0, 4000, 100, 1000.0)
+    gap = three_polls
+    stop = ([900, 1000, 1000 + gap, 1000 + 2 * gap], [KMH_36, 0.0, 0.0, KMH_36])
+    assert _stops(stop, rpm) == []
 
 
 def test_stop_event_still_open_at_the_end_yields_nothing():

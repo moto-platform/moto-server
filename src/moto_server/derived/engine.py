@@ -30,7 +30,6 @@ from moto_server.derived.context import (
     Env,
     Feed,
     InputInvalid,
-    did_age_limit_ms,
 )
 from moto_server.derived.formulas import FORMULAS, Formula
 from moto_server.derived.inputs import Series
@@ -155,9 +154,7 @@ def _evaluate_one(
             continue
         if kind == "sensor":
             stale = sensors[key]["stale_after_ms"]
-        elif formula.kind == "event":  # events have no stale_after_ms: the D-025 age limit
-            stale = did_age_limit_ms(key)
-        else:  # D-070 item 2: a DID input is judged by the DID's own stale_after_ms
+        else:  # D-070 item 2 / D-087: a DID input (event or not) is judged by its own limit
             stale = did_limits[key]
         feeds[inp] = Feed(series.times, list(series.values), stale)
     if missing:
@@ -219,7 +216,8 @@ def evaluate(
     """Evaluates every signal of `specs` (default: the pinned defs) over `inputs`.
 
     `did_limits` is the DID table's stale_after_ms per DID name (default: the generated
-    vehicle_cl250.DID_STALE_AFTER_MS), the age limit of every non-event DID input.
+    vehicle_cl250.DID_STALE_AFTER_MS), the age limit of every DID input (D-087: events and
+    class B too).
     """
     specs = specs if specs is not None else vehicle_derived.SIGNALS
     formulas = formulas if formulas is not None else FORMULAS

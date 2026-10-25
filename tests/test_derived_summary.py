@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from moto_server.defs import vehicle_catalog, vehicle_derived
+from moto_server.defs import vehicle_catalog, vehicle_cl250, vehicle_derived
 from moto_server.derived import engine, summary
-from moto_server.derived.context import Feed, InputInvalid, did_age_limit_ms
+from moto_server.derived.context import Feed, InputInvalid
 from moto_server.derived.formulas import FORMULAS
 from moto_server.derived.inputs import resolve_sensor
 from moto_server.derived.summary import NOT_IMPLEMENTED_REASONS, SUMMARIES, SummaryEnv
@@ -185,10 +185,21 @@ def test_fuel_used_integrates_litres_per_hour():
 
 
 def test_fuel_used_integration_over_a_gap_adds_nothing():
-    limit = did_age_limit_ms("ENGINE_FUEL_RATE")
+    limit = vehicle_cl250.DID_STALE_AFTER_MS["ENGINE_FUEL_RATE"]
     fuel = {"did.ENGINE_FUEL_RATE": ([0, 20000], [3600.0, 3600.0])}
     # held only for the freshness limit, not for the 20 s gap
     assert _scalar(_run(fuel), "ride_fuel_used") == (pytest.approx(limit / 1000.0), None)
+
+
+def test_did_input_is_held_for_its_own_limit_not_three_polls():
+    # D-087: the hold limit is the DID's own stale_after_ms; with a limit narrower than 3 polls
+    # (as VEHICLE_SPEED has: 300 ms vs 330 ms) a gap of 3 polls is not bridged beyond it
+    poll = vehicle_catalog.SIGNALS["ENGINE_FUEL_RATE"]["poll_period_ms"]
+    own = poll  # narrower than the old 3 x poll
+    fuel = {"did.ENGINE_FUEL_RATE": ([0, 3 * poll], [3600.0, 3600.0])}
+    evaluation = engine.Evaluation()
+    result = summary.evaluate(FakeInputs(fuel), evaluation, did_limits={"ENGINE_FUEL_RATE": own})
+    assert _scalar(result, "ride_fuel_used") == (pytest.approx(own / 1000.0), None)
 
 
 def test_fuel_consumption_is_litres_per_100_km():
@@ -245,7 +256,7 @@ def test_operating_point_time_cells_are_row_major_and_outside_values_are_reporte
 
 
 def test_time_at_temperature_holds_never_beyond_freshness():
-    limit = did_age_limit_ms("COOLANT_TEMP")  # 2400 ms
+    limit = vehicle_cl250.DID_STALE_AFTER_MS["COOLANT_TEMP"]
     # 85 degC -> bin 5 of 10 (30..130), 95 -> bin 6; the 8 s gap after t=2000 adds only `limit`
     result = _run({COOLANT: ([0, 1000, 2000, 10000], [85.0, 85.0, 95.0, 95.0])})
     cells = _cells(result, "ride_coolant_time_at_temp")
