@@ -421,6 +421,9 @@ SCENARIOS = (
 )
 
 
+SCENARIOS_BY_NAME = {s.name: s for s in SCENARIOS}
+
+
 def input_rows(scenario: Scenario, dids: list[str], idx: Mapping[str, int]) -> list[Any]:
     """(time_ms, did_idx, value) of every DID at its own poll period, ascending time, ties in
     DID table order."""
@@ -628,6 +631,7 @@ class Generation:
     selected: list[str]
     coverage: dict[str, dict[str, int]]  # signal -> scenario -> valid rows
     stats: dict[str, tuple[int, int]]  # scenario -> (input rows, output rows)
+    class_b: Any = None  # golden_b.ClassBGeneration
 
 
 def _file(name: str, body: str) -> GeneratedFile:
@@ -660,7 +664,11 @@ def generate() -> Generation:
     never = [s for s, per in coverage.items() if not any(per.values())]
     if never:
         raise RuntimeError(f"selected signals never valid in any scenario: {never}")
-    return Generation(files, list(selected), coverage, stats)
+    from moto_server.derived import golden_b  # class B extends this module (lazy: no cycle)
+
+    class_b = golden_b.generate_b()
+    files += class_b.files
+    return Generation(files, list(selected), coverage, stats, class_b)
 
 
 def manifest_text(files: list[GeneratedFile]) -> str:
@@ -699,6 +707,10 @@ def report(gen: Generation, out_dir: Path, manifest: Path | None) -> str:
         lines.append(f"  {f.name:<28} {size / 1024:7.1f} KB  sha256={f.sha256[:12]}{extra}")
     lines.append(f"selected signals ({len(gen.selected)}): valid rows per scenario")
     lines.append(coverage_table(gen))
+    if gen.class_b is not None:
+        from moto_server.derived import golden_b
+
+        lines.append(golden_b.report_b(gen.class_b))
     if manifest is not None:
         lines.append(f"manifest: {manifest}")
     return "\n".join(lines)

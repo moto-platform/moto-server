@@ -365,6 +365,30 @@ uv run moto-server golden --out <moto-rt-core>/tests/host/vectors   # also pytho
   and the defs version. `tests/test_golden.py` regenerates and compares; after a formula or
   defs-pin change, rerun the command above, commit the headers in rt-core and the manifest here.
 
+### Class-B (per-ride) golden vectors (C3 part 2a)
+
+The same command also writes `derived_vectors_b.h` (types) and `derived_<scenario>_b.h` (one per
+scenario, plus `derived_two_rides_b.h`) with the expected per-ride summaries of
+`derived/summary.py`, `golden_b.py` holds the generator. Same banner / content-sha256 / manifest
+as class A; tolerance = resolution / 2.
+
+- Rows: `derived_vector_b_output_t { ride, signal (VEHICLE_CL250_DERIVED_*), element, valid, flag,
+  value }`, `derived_vector_tol_t` per signal. `element` is always 0 (reserved).
+- Ride = one D-075 stop epoch (D-087 item 2): the vector start opens the ride, its end closes it, so
+  single-ride scenarios have no epoch input. Their inputs are those of `derived_<scenario>.h`.
+- Rides table `derived_vector_ride_t { ride, start_ms, end_ms }` is the epoch-marker table: at
+  `start_ms` the rt-core test opens a new epoch, at `end_ms` it ends the ride (ECU absent) and
+  compares that ride's closed values. `two_rides` (accel_gears, then edge_values after an 8 s
+  stretch without any input, longer than `ecu_absent_timeout_ms` = 3000 ms, asserted) carries its own
+  inputs and each ride is evaluated from a fresh state.
+- Selected (12): ride_distance, ride_time, ride_idle_time, ride_stop_count, ride_fuel_used,
+  ride_fuel_consumption, ride_ltft_mean, ride_stft_std, ride_coolant_rate_max,
+  ride_start_coolant_temp, ride_start_intake_temp, ride_end_coolant_temp.
+- Skipped: binned multi-element signals (operating_point_time, ride_coolant/oil_time_at_temp: out of
+  scope of 2a), signals with a `sensor.*` input (ride_distance_gps, ride_bus_off_count,
+  ride_tester_rtt_max, ride_tester_step_gap_max) and every class-B signal without a summary in the
+  reference. No GPS name appears in any file (asserted).
+
 ## Development
 
 ```bash
