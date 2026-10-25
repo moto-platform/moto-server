@@ -11,40 +11,15 @@ from __future__ import annotations
 
 import importlib
 import re
-import sys
 from dataclasses import dataclass, field
 from functools import cache
 from pathlib import Path
-from types import ModuleType
 
 from moto_server.defs import moto_defs  # also puts gen/python on sys.path
 
 # Submodules are not imported by ``moto_defs/__init__``; load them explicitly.
 platform = importlib.import_module("moto_defs.platform")
-
-
-def _load_e2e() -> ModuleType:
-    """Import ``moto_defs.e2e``.
-
-    At defs v0.14.0 the generated file starts with a codegen banner line placed before
-    ``from __future__ import annotations``, which is a SyntaxError. Until the pin moves
-    to a fixed defs release, load the same source with that banner line dropped.
-    """
-    try:
-        return importlib.import_module("moto_defs.e2e")
-    except SyntaxError:
-        path = Path(moto_defs.__file__).resolve().parent / "e2e.py"
-        lines = path.read_text().splitlines()
-        if not lines[0].startswith('"""GENERATED'):
-            raise
-        module = ModuleType("moto_defs.e2e")
-        module.__file__ = str(path)
-        sys.modules[module.__name__] = module
-        exec(compile("\n".join(lines[1:]), str(path), "exec"), module.__dict__)  # noqa: S102
-        return module
-
-
-e2e = _load_e2e()
+e2e = importlib.import_module("moto_defs.e2e")
 _DBC_PATH = Path(moto_defs.__file__).resolve().parents[3] / "dbc" / "platform.dbc"
 
 _BO_RE = re.compile(r"^BO_\s+(\d+)\s+(\w+)\s*:\s*(\d+)\s+(\w+)")
