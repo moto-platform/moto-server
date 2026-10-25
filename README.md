@@ -253,7 +253,7 @@ C across rides, D server only). Until rt-core exists the Python reference in
 - Event kind: a formula of kind `event` has no grid; its rows sit at the event times and its
   coverage entry has no `period_ms`. Only `stop_event` exists: a stop starts at the first speed
   0 with RPM above 0 and ends at the first later speed above 0 (value = seconds, row time =
-  the end); a gap in the speed samples above 3 poll periods (D-025) or a stop still open at
+  the end); a gap in the speed samples above the speed DID's own `stale_after_ms` (D-087) or a stop still open at
   the end gives no event. The range check applies to events too.
 - Not computed (`not_implemented`): the other events, the other class-A signals without a
   formula (missing thresholds or constants), and class B/C/D; signals with `ready_phase0:
@@ -277,8 +277,8 @@ Phase 0 has no ride segmentation: **one stored session is one ride** (the report
 results of its class-B inputs (`ride_fuel_consumption` follows `ride_fuel_used` and
 `ride_distance`, dependency order) and the raw `did.*` / `sensor.*` series. Time integrals and
 time-in-cell use the class-A hold rule (`formulas.hold_segments`): a value is held between
-samples but never beyond the input's freshness (`did.*` of a class-B signal: 3 poll periods,
-D-025; sensors: `SENSORS` `stale_after_ms`), so a gap adds nothing. A value outside the defs
+samples but never beyond the input's freshness (`did.*` of a class-B signal: the DID's own `stale_after_ms`,
+D-087; sensors: `SENSORS` `stale_after_ms`), so a gap adds nothing. A value outside the defs
 `range` is null with `out_of_range` (each cell too); statuses are the class-A ones.
 
 - Implemented (19 of the 46 class-B signals): `ride_distance`, `ride_time`, `ride_idle_time`

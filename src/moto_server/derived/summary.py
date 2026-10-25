@@ -13,7 +13,7 @@ It returns a scalar (value | None, flag | None) or, for a signal with defs `bins
 (one value per cell, row-major, the first bins entry is the major axis). Time integrals reuse
 formulas.hold_segments: a value is held between samples but never beyond the input's
 freshness, so a gap adds nothing. The freshness limit of a did.* input of a class-B signal
-(no stale_after_ms of its own) is context.did_age_limit_ms; sensors use SENSORS.
+(no stale_after_ms of its own) is the DID's own stale_after_ms (D-087); sensors use SENSORS.
 Statuses are those of the engine; every value outside the defs `range` is null with the flag
 "out_of_range" (each cell too). Only declared inputs may be read (tests check this).
 """
@@ -25,7 +25,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
-from moto_server.defs import vehicle_derived
+from moto_server.defs import vehicle_cl250, vehicle_derived
 from moto_server.derived.context import (
     FLAG_INSUFFICIENT_SAMPLES,
     FLAG_INVALID_INPUT,
@@ -33,7 +33,6 @@ from moto_server.derived.context import (
     Env,
     Feed,
     InputInvalid,
-    did_age_limit_ms,
 )
 from moto_server.derived.engine import (
     COMPUTED,
@@ -437,6 +436,7 @@ def _feeds_of(
     results: Mapping[str, float | None],
     specs: Mapping[str, Mapping[str, Any]],
     sensors: Mapping[str, Mapping[str, Any]],
+    did_limits: Mapping[str, int],
 ) -> tuple[dict[str, Feed], list[str]]:
     """The feeds of the did/sensor inputs and the list of inputs that are missing here."""
     feeds: dict[str, Feed] = {}
@@ -454,7 +454,7 @@ def _feeds_of(
         if series is None:
             missing.append(inp)
             continue
-        stale = sensors[key]["stale_after_ms"] if kind == "sensor" else did_age_limit_ms(key)
+        stale = sensors[key]["stale_after_ms"] if kind == "sensor" else did_limits[key]
         feeds[inp] = Feed(series.times, list(series.values), stale)
     return feeds, missing
 
@@ -499,12 +499,14 @@ def evaluate(
     specs: Mapping[str, Mapping[str, Any]] | None = None,
     summaries: Mapping[str, Summary] | None = None,
     sensors: Mapping[str, Mapping[str, Any]] | None = None,
+    did_limits: Mapping[str, int] | None = None,
 ) -> SummaryEvaluation:
     """Evaluates every class-B signal of `specs` (default: the pinned defs) over `inputs`
     and the class-A `evaluation`."""
     specs = specs if specs is not None else vehicle_derived.SIGNALS
     summaries = summaries if summaries is not None else SUMMARIES
     sensors = sensors if sensors is not None else vehicle_derived.SENSORS
+    did_limits = did_limits if did_limits is not None else vehicle_cl250.DID_STALE_AFTER_MS
 
     outputs = {o.name: o for o in evaluation.outputs}
     results: dict[str, float | None] = {}  # computed class-B scalars
@@ -523,7 +525,9 @@ def evaluate(
             entries[name] = {"status": NOT_IMPLEMENTED, "reason": reason}
         else:
             try:
-                feeds, missing = _feeds_of(spec, inputs, outputs, results, specs, sensors)
+                feeds, missing = _feeds_of(
+                    spec, inputs, outputs, results, specs, sensors, did_limits
+                )
                 if missing:
                     entries[name] = {"status": MISSING_INPUTS, "missing": missing}
                 else:
