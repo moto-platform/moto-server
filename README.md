@@ -223,7 +223,7 @@ C across rides, D server only). Until rt-core exists the Python reference in
   `missing_inputs`; the tester and CAN health counters come from `telemetry.parquet`.
 - `engine.py`: topological order over `derived.*` inputs; the output grid is the signal's
   `period_ms` from the span where all inputs exist. An input counts while its age is within
-  its `stale_after_ms` (the signal's own for `did.*`, `SENSORS` for sensors, the producer's for
+  its own `stale_after_ms` (the DID table's `DID_STALE_AFTER_MS` for `did.*`, `SENSORS` for sensors, the producer's for
   `derived.*`); otherwise the row is null with flag `stale_input`. A null derived input gives
   `invalid_input`, too few samples in a window `insufficient_samples`, a result outside the
   defs `range` null with `out_of_range`. `window_ms` is the least-squares slope window
@@ -346,7 +346,7 @@ uv run moto-server golden --out <moto-rt-core>/tests/host/vectors   # also pytho
 
 - Defs version: the headers record the defs version they were generated from (v0.18.1 now).
   The expected outputs use that version's derived `stale_after_ms` (the age limit of a
-  signal's DID inputs), which changed in v0.14.0, so rt-core's derived-module test needs a
+  derived input; a DID input uses the DID's own limit, D-070), which changed in v0.14.0, so rt-core's derived-module test needs a
   defs pin with the same derived table (v0.14.0 or later); against v0.13.0 the torque and
   power rows would differ. The indices are the same in v0.13.0.
 - Location in rt-core: `tests/host/vectors/` (`derived_vectors.h` types + one

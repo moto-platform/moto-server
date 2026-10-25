@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from moto_server.defs import vehicle_derived
+from moto_server.defs import vehicle_cl250, vehicle_derived
 from moto_server.derived import engine
 from moto_server.derived.context import At
 from moto_server.derived.formulas import Formula
@@ -23,6 +23,11 @@ def _spec(inputs: list[str], **kw):
         "ready_phase0": True,
         **kw,
     }
+
+
+# The DID table's limits of the made-up DIDs of these tests (D-070: a DID input is judged by
+# the DID's own stale_after_ms, not by the signal's); 250 ms = the `_spec` default.
+LIMITS = {"X": 250, "A": 250, "B": 250}
 
 
 def _point(fn):
@@ -64,7 +69,11 @@ def test_a_consumer_listed_before_its_producer_still_sees_the_producer():
         "third": _point(lambda at: at.value("derived.second") + 10.0),
     }
     result = engine.evaluate(
-        FakeInputs({"did.X": const_series(0, 500, 50, 1.0)}), specs, formulas, {}
+        FakeInputs({"did.X": const_series(0, 500, 50, 1.0)}),
+        specs,
+        formulas,
+        {},
+        LIMITS,
     )
     assert [o.name for o in result.outputs] == ["first", "second", "third"]
     assert set(_by_name(result)["third"].values) == {14.0}
@@ -74,11 +83,11 @@ def test_a_consumer_listed_before_its_producer_still_sees_the_producer():
 
 
 def test_stale_input_gives_null_not_a_held_value():
-    # speed: 0..200 ms, then nothing until 1000..1200 ms; stale limit of the signal 250 ms
+    # X: 0..200 ms, then nothing until 1000..1200 ms; stale limit of the DID 250 ms
     times = [0, 100, 200, 1000, 1100, 1200]
     specs = {"s": _spec(["did.X"])}
     formulas = {"s": _point(lambda at: at.value("did.X"))}
-    result = engine.evaluate(FakeInputs({"did.X": (times, [5.0] * 6)}), specs, formulas, {})
+    result = engine.evaluate(FakeInputs({"did.X": (times, [5.0] * 6)}), specs, formulas, {}, LIMITS)
     out = _by_name(result)["s"]
     by_time = dict(zip(out.times, zip(out.values, out.flags, strict=True), strict=True))
     assert by_time[200] == (5.0, None)
@@ -86,6 +95,42 @@ def test_stale_input_gives_null_not_a_held_value():
     assert by_time[500] == (None, "stale_input")  # age 300 > 250
     assert by_time[900] == (None, "stale_input")
     assert by_time[1000] == (5.0, None)
+
+
+def test_the_stale_limit_of_a_did_is_its_own_not_the_signals():
+    # VEHICLE_SPEED's own limit is 300 ms; the signal's (6 s here) must not widen it
+    own = vehicle_cl250.DID_STALE_AFTER_MS["VEHICLE_SPEED"]
+    assert own == 300
+    specs = {"s": _spec(["did.VEHICLE_SPEED"], period_ms=100, stale_after_ms=6000)}
+    formulas = {"s": _point(lambda at: at.value("did.VEHICLE_SPEED"))}
+    times = [0, 1000]  # one sample at 0, the next only at 1000: a 1 s gap
+    result = engine.evaluate(
+        FakeInputs({"did.VEHICLE_SPEED": (times, [5.0, 5.0])}), specs, formulas, {}
+    )
+    out = _by_name(result)["s"]
+    by_time = dict(zip(out.times, zip(out.values, out.flags, strict=True), strict=True))
+    assert by_time[300] == (5.0, None)  # age 300 <= own limit
+    assert by_time[400] == (None, "stale_input")  # age 400 > 300, though <= 6000
+    assert by_time[900] == (None, "stale_input")
+    assert by_time[1000] == (5.0, None)
+
+
+def test_the_fuel_consumption_inputs_use_the_dids_own_limits():
+    # a 6 s old VEHICLE_SPEED must not feed fuel_consumption_instant (own limit 300 ms)
+    spec = vehicle_derived.SIGNALS["fuel_consumption_instant"]
+    assert spec["stale_after_ms"] > vehicle_cl250.DID_STALE_AFTER_MS["VEHICLE_SPEED"]
+
+    stale = engine.evaluate(
+        FakeInputs(
+            {
+                "did.ENGINE_FUEL_RATE": const_series(0, 8000, 100, 3.0),
+                "did.VEHICLE_SPEED": ([0, 7000], [36.0, 36.0]),
+            }
+        )
+    )
+    out = _by_name(stale)["fuel_consumption_instant"]
+    by_time = dict(zip(out.times, zip(out.values, out.flags, strict=True), strict=True))
+    assert by_time[6600] == (None, "stale_input")  # speed sample 6.6 s old
 
 
 def test_the_stale_limit_of_a_sensor_comes_from_sensors_not_the_signal():
@@ -187,7 +232,7 @@ def test_out_of_range_result_is_null_with_a_flag():
     formulas = {"r": _point(lambda at: at.value("did.X"))}
     values = [5.0, 11.0, -1.0, 10.0, float("nan")]
     result = engine.evaluate(
-        FakeInputs({"did.X": ([0, 100, 200, 300, 400], values)}), specs, formulas, {}
+        FakeInputs({"did.X": ([0, 100, 200, 300, 400], values)}), specs, formulas, {}, LIMITS
     )
     out = _by_name(result)["r"]
     assert out.values == [5.0, None, None, 10.0, None]
@@ -218,7 +263,7 @@ def test_the_grid_spans_the_overlap_of_the_inputs():
     specs = {"s": _spec(["did.A", "did.B"], period_ms=100)}
     formulas = {"s": _point(lambda at: at.value("did.A") + at.value("did.B"))}
     inputs = {"did.A": const_series(100, 600, 50, 1.0), "did.B": const_series(300, 900, 50, 2.0)}
-    out = _by_name(engine.evaluate(FakeInputs(inputs), specs, formulas, {}))["s"]
+    out = _by_name(engine.evaluate(FakeInputs(inputs), specs, formulas, {}, LIMITS))["s"]
     assert out.times == [300, 400, 500, 600]
     assert set(out.values) == {3.0}
 
@@ -227,7 +272,7 @@ def test_inputs_without_a_common_span_are_missing_inputs():
     specs = {"s": _spec(["did.A", "did.B"])}
     formulas = {"s": _point(lambda at: 0.0)}
     inputs = {"did.A": const_series(0, 100, 50, 1.0), "did.B": const_series(900, 1000, 50, 2.0)}
-    result = engine.evaluate(FakeInputs(inputs), specs, formulas, {})
+    result = engine.evaluate(FakeInputs(inputs), specs, formulas, {}, LIMITS)
     assert result.coverage["s"]["status"] == engine.MISSING_INPUTS
     assert result.coverage["s"]["reason"] == "no common time span"
 
@@ -252,7 +297,11 @@ def test_a_failing_formula_is_an_error_and_does_not_stop_the_others():
     specs = {"bad": _spec(["did.X"]), "good": _spec(["did.X"])}
     formulas = {"bad": _point(boom), "good": _point(lambda at: 1.0)}
     result = engine.evaluate(
-        FakeInputs({"did.X": const_series(0, 500, 50, 1.0)}), specs, formulas, {}
+        FakeInputs({"did.X": const_series(0, 500, 50, 1.0)}),
+        specs,
+        formulas,
+        {},
+        LIMITS,
     )
     assert result.coverage["bad"] == {
         "class": "A",

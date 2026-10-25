@@ -180,11 +180,12 @@ def test_trip_distance_integrates_the_speed():
 
 def test_trip_distance_does_not_integrate_a_gap_longer_than_the_stale_limit():
     # speed samples 0..1000 and 9000..10000: the pre-gap sample is held for stale_after_ms
-    # (3000 ms) only, so 1 s + 3 s + 1 s at 10 m/s = 50 m; 4000..9000 adds nothing.
+    # (VEHICLE_SPEED's own 300 ms, D-070) only, so 1 s + 0.3 s + 1 s at 10 m/s = 23 m;
+    # 1300..9000 adds nothing.
     times = [*range(0, 1001, 100), *range(9000, 10001, 100)]
     out, _ = _outputs({SPEED: (times, [KMH_36] * len(times))}, "trip_distance")
     by_time = dict(zip(out.times, out.values, strict=True))
-    assert by_time[10000] == pytest.approx(0.05)
+    assert by_time[10000] == pytest.approx(0.023)
     assert by_time[5000] is None  # stale while the gap lasts, never a held value
     assert out.flags[out.times.index(5000)] == "stale_input"
 
