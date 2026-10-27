@@ -29,7 +29,7 @@ class CanFrameDto(BaseModel):
 class DecodedSignalDto(BaseModel):
     """Physical scaled signal derived from a CAN frame or DID."""
 
-    name: str = Field(..., description="Signal name matching moto-vehicle-defs catalog")
+    name: str = Field(..., description="Signal name matching vehicle-defs catalog")
     value: float | int | str = Field(..., description="Physical scaled value")
     unit: str = Field(default="", description="Engineering unit (e.g. rpm, km/h, deg, V, C)")
     timestamp_us: int = Field(..., description="Timestamp in microseconds")

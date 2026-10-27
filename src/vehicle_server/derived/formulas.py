@@ -1,8 +1,8 @@
 """The formula of each implemented derived signal (D-070 item 2, class A, parts 1 and 2).
 
 Names, units, ranges, periods, windows and stale limits come from
-moto_defs.vehicle_derived.SIGNALS; vehicle constants from moto_defs.vehicle_constants.
-This module only holds the arithmetic, which follows moto-vehicle-defs
+vehicle_defs.vehicle_derived.SIGNALS; vehicle constants from vehicle_defs.vehicle_constants.
+This module only holds the arithmetic, which follows vehicle-defs
 docs/vehicle-data-catalog.md section 5 and each signal's description in the defs. The input
 names used below are checked against the defs by tests (every one must be a declared input
 of its signal and must resolve).
@@ -25,14 +25,14 @@ from bisect import bisect_right
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from moto_server.derived.context import (
+from vehicle_server.derived.context import (
     FLAG_INSUFFICIENT_SAMPLES,
     FLAG_INVALID_INPUT,
     At,
     Env,
     InputInvalid,
 )
-from moto_server.derived.inputs import STANDARD_GRAVITY_MPS2
+from vehicle_server.derived.inputs import STANDARD_GRAVITY_MPS2
 
 # --- unit conversions and physics (not vehicle constants) -----------------------------
 KMH_TO_MPS = 1.0 / 3.6

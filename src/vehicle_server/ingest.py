@@ -1,7 +1,7 @@
 """Accepts a session upload (folder or zip), validates it against the session
 contract, stores it, and produces report.json + parquet.
 
-Storage layout under $MOTO_DATA_DIR/sessions/<session_id>/:
+Storage layout under $VEHICLE_DATA_DIR/sessions/<session_id>/:
     raw/       the four contract files, copied verbatim (plus imu.csv / gps.csv / signals.csv
                if present)
     parquet/   telemetry.parquet (and imu.parquet / gps.parquet / signals.parquet)
@@ -25,8 +25,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from moto_server import ble_schema, derived, index, parquet, report
-from moto_server.config import Settings
+from vehicle_server import ble_schema, derived, index, parquet, report
+from vehicle_server.config import Settings
 
 SESSION_ID_RE = re.compile(r"^\d{8}-\d{6}-[0-9a-f]{4}$")
 REQUIRED_FILES = {"meta.json", "telemetry.csv", "events.csv", "summary.json"}
@@ -136,7 +136,7 @@ def ingest_path(
     inside one top-level folder, per the session contract)."""
     schema = schema or ble_schema.load_default_schema()
 
-    with tempfile.TemporaryDirectory(prefix="moto-server-ingest-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="vehicle-server-ingest-") as tmp:
         tmp_path = Path(tmp)
         if source.is_file() and source.suffix == ".zip":
             extract_dir = tmp_path / "extracted"

@@ -1,9 +1,9 @@
 """Per-input time series of a stored session, the raw material of the derived signals.
 
-Every input name of moto_defs.vehicle_derived.SIGNALS[...]["inputs"] is one of
+Every input name of vehicle_defs.vehicle_derived.SIGNALS[...]["inputs"] is one of
     did.<NAME>      a vehicle-catalog DID (signals.parquet; the telemetry columns as fallback)
     sensor.<name>   a derived-signal sensor (imu.parquet / gps.parquet / telemetry.parquet)
-    const.<name>    a vehicle constant (moto_defs.vehicle_constants), not a series
+    const.<name>    a vehicle constant (vehicle_defs.vehicle_constants), not a series
     derived.<name>  another derived signal (produced by the engine, not read here)
 The time axis is the node's device_time_ms (integer ms). A series only holds samples
 with a value: a record whose DID was not valid is absent, so its age grows until the
@@ -24,9 +24,9 @@ from pathlib import Path
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
-from moto_server import signals
-from moto_server.decode import GPS_RAW_COLUMNS, GPS_SCALED_COLUMNS, csv_column_for_field
-from moto_server.defs import vehicle_catalog, vehicle_cl250, vehicle_constants, vehicle_derived
+from vehicle_server import signals
+from vehicle_server.decode import GPS_RAW_COLUMNS, GPS_SCALED_COLUMNS, csv_column_for_field
+from vehicle_server.defs import vehicle_catalog, vehicle_cl250, vehicle_constants, vehicle_derived
 
 # Standard gravity (ISO 80000-3): the IMU parquet stores acceleration in g, the derived
 # sensors are defined in m/s2.

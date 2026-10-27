@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from moto_server.defs import vehicle_catalog, vehicle_cl250, vehicle_derived
-from moto_server.derived import engine, summary
-from moto_server.derived.context import Feed, InputInvalid
-from moto_server.derived.formulas import FORMULAS
-from moto_server.derived.inputs import resolve_sensor
-from moto_server.derived.summary import NOT_IMPLEMENTED_REASONS, SUMMARIES, SummaryEnv
+from vehicle_server.defs import vehicle_catalog, vehicle_cl250, vehicle_derived
+from vehicle_server.derived import engine, summary
+from vehicle_server.derived.context import Feed, InputInvalid
+from vehicle_server.derived.formulas import FORMULAS
+from vehicle_server.derived.inputs import resolve_sensor
+from vehicle_server.derived.summary import NOT_IMPLEMENTED_REASONS, SUMMARIES, SummaryEnv
 
 from .derived_helpers import FakeInputs, const_series, ramp
 

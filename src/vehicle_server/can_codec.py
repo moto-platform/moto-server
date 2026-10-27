@@ -1,11 +1,11 @@
 """Generic CAN frame packer/unpacker driven by the generated defs tables.
 
-``moto_defs.platform`` exports the platform-bus frame IDs, lengths and E2E
+``vehicle_defs.platform`` exports the platform-bus frame IDs, lengths and E2E
 DataIDs (``MESSAGES``) and the per-signal layout (``SIGNALS``: start bit, length,
 byte order, signedness, factor, offset, unit, value tables), so nothing is
 hand-written or parsed here (platform rule #2). This module is a thin adapter
 over those tables. The E2E CRC and alive counter are written by
-``moto_defs.e2e.protect``.
+``vehicle_defs.e2e.protect``.
 """
 
 from __future__ import annotations
@@ -14,9 +14,9 @@ import importlib
 from dataclasses import dataclass, field
 from functools import cache
 
-# Submodules are not imported by ``moto_defs/__init__``; load them explicitly.
-platform = importlib.import_module("moto_defs.platform")
-e2e = importlib.import_module("moto_defs.e2e")
+# Submodules are not imported by ``vehicle_defs/__init__``; load them explicitly.
+platform = importlib.import_module("vehicle_defs.platform")
+e2e = importlib.import_module("vehicle_defs.e2e")
 
 
 @dataclass(frozen=True)
@@ -53,7 +53,7 @@ class Message:
 
 @cache
 def platform_messages() -> dict[str, Message]:
-    """Platform-bus messages adapted from ``moto_defs.platform`` ``MESSAGES``/``SIGNALS``."""
+    """Platform-bus messages adapted from ``vehicle_defs.platform`` ``MESSAGES``/``SIGNALS``."""
     result: dict[str, Message] = {}
     for name, info in platform.MESSAGES.items():
         signals: dict[str, Signal] = {}

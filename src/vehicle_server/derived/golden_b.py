@@ -2,7 +2,7 @@
 
 Extends golden.py: the same scenarios and inputs, but the expected outputs are the per-ride
 summaries of summary.py (the Python reference of the class-B signals) instead of the class-A
-rows. Files (all committed into moto-rt-core under tests/host/vectors/, banner and
+rows. Files (all committed into vehicle-rt-core under tests/host/vectors/, banner and
 content-sha256 as class A):
 
     derived_vectors_b.h      types: ride marker, class-B output row (the flag enum, the input
@@ -37,12 +37,12 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from moto_server.defs import vehicle_cl250, vehicle_derived
-from moto_server.derived import golden, summary
-from moto_server.derived.engine import COMPUTED, ERROR
-from moto_server.derived.engine import evaluate as evaluate_class_a
-from moto_server.derived.golden import Scenario
-from moto_server.derived.inputs import Series
+from vehicle_server.defs import vehicle_cl250, vehicle_derived
+from vehicle_server.derived import golden, summary
+from vehicle_server.derived.engine import COMPUTED, ERROR
+from vehicle_server.derived.engine import evaluate as evaluate_class_a
+from vehicle_server.derived.golden import Scenario
+from vehicle_server.derived.inputs import Series
 
 TYPES_HEADER_B = "derived_vectors_b.h"
 

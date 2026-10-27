@@ -2,7 +2,7 @@
 
 Column names: physical signals as `<defs signal>_<unit>` (e.g. engine_speed_rpm),
 ages as `<signal>_age_ms`, validity as `<signal>_valid` -- see signals.py for the
-naming rules, driven by moto_defs.vehicle_cl250.DIDS units. The version 4 tester
+naming rules, driven by vehicle_defs.vehicle_cl250.DIDS units. The version 4 tester
 statistics keep their telemetry.csv names (step_gap_max_ms, ..., rtt_nrc78_count); the
 version 3 CAN health fields use the schema field names in snake_case (can_bus_state,
 can_tx_error_count, ..., can_flags; decode.CAN_HEALTH_FIELDS).
@@ -23,8 +23,8 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from moto_server import ble_schema, signals
-from moto_server.decode import (
+from vehicle_server import ble_schema, signals
+from vehicle_server.decode import (
     CAN_HEALTH_FIELDS,
     GPS_FLAG_COLUMNS,
     GPS_RAW_COLUMNS,

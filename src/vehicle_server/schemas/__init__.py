@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from moto_server.schemas.stream import (
+from vehicle_server.schemas.stream import (
     BusStatsDto,
     CanFrameDto,
     DecodedSignalDto,

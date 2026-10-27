@@ -1,9 +1,9 @@
 """FastAPI application: session ingestion + read API.
 
-Bearer token auth (MOTO_API_TOKEN) guards every endpoint except GET /health.
+Bearer token auth (VEHICLE_API_TOKEN) guards every endpoint except GET /health.
 GET /ws/live (WebSocket) checks the same token in its first "hello" message
-(moto_server.stream); MOTO_LIVE_SOURCE picks its producer ("none" or "mock").
-If MOTO_API_TOKEN is not set, protected endpoints return 503 (the API does
+(vehicle_server.stream); VEHICLE_LIVE_SOURCE picks its producer ("none" or "mock").
+If VEHICLE_API_TOKEN is not set, protected endpoints return 503 (the API does
 not silently run open).
 """
 
@@ -20,9 +20,9 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request, UploadFile,
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
 
-from moto_server import index, report, series, stream
-from moto_server.config import Settings, load_settings
-from moto_server.ingest import (
+from vehicle_server import index, report, series, stream
+from vehicle_server.config import Settings, load_settings
+from vehicle_server.ingest import (
     SESSION_ID_RE,
     InvalidSessionError,
     SessionConflictError,
@@ -41,7 +41,7 @@ SettingsDep = Annotated[Settings, Depends(get_settings)]
 
 def require_token(request: Request, settings: SettingsDep) -> None:
     if settings.api_token is None:
-        raise HTTPException(status_code=503, detail="MOTO_API_TOKEN is not configured")
+        raise HTTPException(status_code=503, detail="VEHICLE_API_TOKEN is not configured")
     auth = request.headers.get("authorization", "")
     # Constant-time comparison so response timing does not leak the token.
     if not hmac.compare_digest(auth.encode(), f"Bearer {settings.api_token}".encode()):
@@ -60,12 +60,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         async with stream.running_source(hub):
             yield
 
-    app = FastAPI(title="moto-server", version="0.2.0", lifespan=lifespan)
+    app = FastAPI(title="vehicle-server", version="0.2.0", lifespan=lifespan)
     app.state.settings = settings
     app.state.live_hub = hub
 
     if settings.cors_origins:
-        # Opt-in (MOTO_CORS_ORIGINS) for the analyzer in a browser on another origin. The
+        # Opt-in (VEHICLE_CORS_ORIGINS) for the analyzer in a browser on another origin. The
         # token travels in the Authorization header, so credentials (cookies) stay off.
         app.add_middleware(
             CORSMiddleware,
@@ -81,7 +81,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/sessions", dependencies=[AuthDep], status_code=201)
     async def create_session(archive: UploadFile, settings: SettingsDep) -> JSONResponse:
-        with tempfile.TemporaryDirectory(prefix="moto-server-upload-") as tmp:
+        with tempfile.TemporaryDirectory(prefix="vehicle-server-upload-") as tmp:
             tmp_zip = Path(tmp) / "upload.zip"
             total = 0
             with tmp_zip.open("wb") as out:
@@ -90,7 +90,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     if total > settings.max_upload_bytes:
                         raise HTTPException(
                             status_code=413,
-                            detail=f"upload exceeds MOTO_MAX_UPLOAD_MB={settings.max_upload_mb}",
+                            detail=f"upload exceeds VEHICLE_MAX_UPLOAD_MB={settings.max_upload_mb}",
                         )
                     out.write(chunk)
 

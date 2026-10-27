@@ -6,10 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from moto_server.can_codec import e2e, platform_messages, unpack_raw
-from moto_server.defs import vehicle_cl250
-from moto_server.mock_stream import MockCanStreamer, uds_read_response
-from moto_server.schemas.stream import (
+from vehicle_server.can_codec import e2e, platform_messages, unpack_raw
+from vehicle_server.defs import vehicle_cl250
+from vehicle_server.mock_stream import MockCanStreamer, uds_read_response
+from vehicle_server.schemas.stream import (
     BusStatsDto,
     CanFrameDto,
     DecodedSignalDto,

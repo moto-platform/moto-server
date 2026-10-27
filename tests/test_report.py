@@ -4,9 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from moto_server.config import Settings
-from moto_server.ingest import ingest_path
-from moto_server.report import render_text
+from vehicle_server.config import Settings
+from vehicle_server.ingest import ingest_path
+from vehicle_server.report import render_text
 
 
 def test_v2_report_exact_loss_and_stale_value(settings: Settings, fixtures_dir: Path):

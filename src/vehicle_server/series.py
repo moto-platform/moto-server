@@ -1,6 +1,6 @@
 """Downsampled time series of a stored session (GET /sessions/{id}/series).
 
-Series names (the same prefixes as moto_server.derived.inputs):
+Series names (the same prefixes as vehicle_server.derived.inputs):
     did.<CATALOG_NAME>   a vehicle_catalog DID with at least one sample
     sensor.<name>        a vehicle_derived.SENSORS entry that SessionInputs resolves to a
                          non-empty series (never a GPS position, D-060)
@@ -27,9 +27,9 @@ from pathlib import Path
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
-from moto_server.defs import vehicle_catalog, vehicle_derived
-from moto_server.derived import derived_path
-from moto_server.derived.inputs import SessionInputs
+from vehicle_server.defs import vehicle_catalog, vehicle_derived
+from vehicle_server.derived import derived_path
+from vehicle_server.derived.inputs import SessionInputs
 
 DEFAULT_MAX_POINTS = 2000
 MIN_MAX_POINTS = 10

@@ -1,4 +1,4 @@
-"""Command-line entry point: `moto-server import|serve|report|list|derive|golden`."""
+"""Command-line entry point: `vehicle-server import|serve|report|list|derive|golden`."""
 
 from __future__ import annotations
 
@@ -7,9 +7,9 @@ import json
 import sys
 from pathlib import Path
 
-from moto_server import index, report
-from moto_server.config import load_settings
-from moto_server.ingest import (
+from vehicle_server import index, report
+from vehicle_server.config import load_settings
+from vehicle_server.ingest import (
     InvalidSessionError,
     SessionConflictError,
     ingest_path,
@@ -40,7 +40,7 @@ def _cmd_import(args: argparse.Namespace) -> int:
 def _cmd_serve(args: argparse.Namespace) -> int:
     import uvicorn
 
-    uvicorn.run("moto_server.api:app", host=args.host, port=args.port, reload=args.reload)
+    uvicorn.run("vehicle_server.api:app", host=args.host, port=args.port, reload=args.reload)
     return 0
 
 
@@ -105,13 +105,13 @@ def _cmd_derive(args: argparse.Namespace) -> int:
 
 
 def _cmd_golden(args: argparse.Namespace) -> int:
-    from moto_server.derived import golden
+    from vehicle_server.derived import golden
 
     return golden.run(args.out, args.manifest)
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="moto-server")
+    parser = argparse.ArgumentParser(prog="vehicle-server")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     import_parser = subparsers.add_parser("import", help="ingest a session folder or zip")
@@ -142,7 +142,7 @@ def build_parser() -> argparse.ArgumentParser:
     golden_parser = subparsers.add_parser(
         "golden", help="write the golden C vectors for the rt-core host tests (D-070)"
     )
-    from moto_server.derived import golden
+    from vehicle_server.derived import golden
 
     golden.add_arguments(golden_parser)
     golden_parser.set_defaults(func=_cmd_golden)

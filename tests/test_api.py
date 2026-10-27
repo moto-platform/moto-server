@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from moto_server.api import create_app
-from moto_server.config import Settings
+from vehicle_server.api import create_app
+from vehicle_server.config import Settings
 
 from .conftest import zip_fixture
 

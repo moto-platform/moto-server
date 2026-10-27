@@ -1,6 +1,6 @@
 """Derived signals of a stored session: the Python reference of D-070 item 2.
 
-derive_session() evaluates moto_defs.vehicle_derived over a session's parquet files and
+derive_session() evaluates vehicle_defs.vehicle_derived over a session's parquet files and
 returns the long-format table plus the coverage block; store() writes
 <session_dir>/derived.parquet (session_id, device_time_ms, signal, value, unit, valid,
 flag) and returns the `derived` block of report.json. Only class A signals with a formula in
@@ -25,9 +25,9 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from moto_server.defs import defs_version, vehicle_derived
-from moto_server.derived import engine, summary
-from moto_server.derived.inputs import SessionInputs
+from vehicle_server.defs import defs_version, vehicle_derived
+from vehicle_server.derived import engine, summary
+from vehicle_server.derived.inputs import SessionInputs
 
 DERIVED_FILE = "parquet/derived.parquet"
 SUMMARY_FILE = "parquet/derived_summary.parquet"

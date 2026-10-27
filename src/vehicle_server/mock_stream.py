@@ -14,9 +14,9 @@ import time
 from collections.abc import AsyncIterator
 from pathlib import Path
 
-from moto_server.can_codec import Signal, e2e, encode, platform_messages, unpack_raw
-from moto_server.defs import vehicle_cl250
-from moto_server.schemas.stream import (
+from vehicle_server.can_codec import Signal, e2e, encode, platform_messages, unpack_raw
+from vehicle_server.defs import vehicle_cl250
+from vehicle_server.schemas.stream import (
     BusStatsDto,
     CanFrameDto,
     DecodedSignalDto,
@@ -80,7 +80,7 @@ class MockCanStreamer:
             states: dict[str, str],
             valid: dict[str, str],
         ) -> None:
-            """Encode a platform message from moto_defs, then report what the frame decodes to.
+            """Encode a platform message from vehicle_defs, then report what the frame decodes to.
 
             ``valid`` maps each reported signal to the VALID bit / STATE field that qualifies it.
             """

@@ -2,7 +2,7 @@
 
 Phase 0 has no ride segmentation: one stored session is one ride, so every summary covers
 the whole session. Names, units, ranges, records and bins come from
-moto_defs.vehicle_derived.SIGNALS (class "B"); this module only holds the arithmetic.
+vehicle_defs.vehicle_derived.SIGNALS (class "B"); this module only holds the arithmetic.
 
 Summaries are evaluated AFTER the class-A evaluation (engine.evaluate), in dependency order
 (ride_fuel_consumption reads ride_fuel_used and ride_distance). A summary function sees:
@@ -25,8 +25,8 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
-from moto_server.defs import vehicle_cl250, vehicle_derived
-from moto_server.derived.context import (
+from vehicle_server.defs import vehicle_cl250, vehicle_derived
+from vehicle_server.derived.context import (
     FLAG_INSUFFICIENT_SAMPLES,
     FLAG_INVALID_INPUT,
     FLAG_OUT_OF_RANGE,
@@ -34,7 +34,7 @@ from moto_server.derived.context import (
     Feed,
     InputInvalid,
 )
-from moto_server.derived.engine import (
+from vehicle_server.derived.engine import (
     COMPUTED,
     ERROR,
     MISSING_INPUTS,
@@ -45,7 +45,7 @@ from moto_server.derived.engine import (
     SignalOutput,
     dependency_order,
 )
-from moto_server.derived.formulas import FLAG_STANDSTILL, Outcome, hold_segments
+from vehicle_server.derived.formulas import FLAG_STANDSTILL, Outcome, hold_segments
 
 # Unit conversions (not vehicle data).
 SECONDS_PER_HOUR = 3600.0

@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from moto_server.defs import vehicle_cl250, vehicle_derived
-from moto_server.derived.context import At, Env, Feed
-from moto_server.derived.formulas import FORMULAS
-from moto_server.derived.inputs import Series
+from vehicle_server.defs import vehicle_cl250, vehicle_derived
+from vehicle_server.derived.context import At, Env, Feed
+from vehicle_server.derived.formulas import FORMULAS
+from vehicle_server.derived.inputs import Series
 
 Samples = tuple[list[int], list[float | None]]
 

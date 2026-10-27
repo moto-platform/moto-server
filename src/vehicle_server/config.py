@@ -29,12 +29,12 @@ class Settings:
 
 
 def load_settings() -> Settings:
-    data_dir = Path(os.environ.get("MOTO_DATA_DIR", "./data")).resolve()
-    api_token = os.environ.get("MOTO_API_TOKEN") or None
-    max_upload_mb = int(os.environ.get("MOTO_MAX_UPLOAD_MB", "100"))
-    live_source = os.environ.get("MOTO_LIVE_SOURCE", "none")
+    data_dir = Path(os.environ.get("VEHICLE_DATA_DIR", "./data")).resolve()
+    api_token = os.environ.get("VEHICLE_API_TOKEN") or None
+    max_upload_mb = int(os.environ.get("VEHICLE_MAX_UPLOAD_MB", "100"))
+    live_source = os.environ.get("VEHICLE_LIVE_SOURCE", "none")
     cors_origins = tuple(
-        o.strip() for o in os.environ.get("MOTO_CORS_ORIGINS", "").split(",") if o.strip()
+        o.strip() for o in os.environ.get("VEHICLE_CORS_ORIGINS", "").split(",") if o.strip()
     )
     return Settings(
         data_dir=data_dir,
