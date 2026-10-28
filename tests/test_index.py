@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from moto_server import index
-from moto_server.config import Settings
-from moto_server.ingest import ingest_path
+from vehicle_server import index
+from vehicle_server.config import Settings
+from vehicle_server.ingest import ingest_path
 
 
 def test_index_row_written_on_ingest(settings: Settings, fixtures_dir: Path):

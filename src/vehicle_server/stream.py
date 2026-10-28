@@ -1,4 +1,4 @@
-"""Live stream fan-out for GET /ws/live (moto-analyzer live source, D-081).
+"""Live stream fan-out for GET /ws/live (vehicle-analyzer live source, D-081).
 
 One producer publishes StreamBatchDto batches into a LiveHub; every WebSocket client
 has its own bounded queue. A slow client never blocks the producer or the other
@@ -6,12 +6,12 @@ clients: when its queue is full the oldest batch is dropped and counted.
 
 Protocol (JSON text messages):
 - client -> server, first message within HELLO_TIMEOUT_S:
-  {"type": "hello", "token": "<MOTO_API_TOKEN>", "channels": [1, 2], "ids": [32, 272]}
+  {"type": "hello", "token": "<VEHICLE_API_TOKEN>", "channels": [1, 2], "ids": [32, 272]}
   (`channels` and `ids` are optional frame filters; decoded signals are not filtered).
   The token travels in the message, never in the URL.
 - server -> client: StreamMessageDto envelopes, {"type": "batch", "payload": ...} and
   every HEARTBEAT_PERIOD_S {"type": "heartbeat", "payload": {"source", "dropped", ...}}.
-- Close codes: 1008 bad or missing hello/token, 1011 MOTO_API_TOKEN not configured.
+- Close codes: 1008 bad or missing hello/token, 1011 VEHICLE_API_TOKEN not configured.
 
 Live sources: "none" (default; heartbeats only) or "mock" (MockCanStreamer, synthetic
 data built from defs). The real source, rt-core via the Raspi (D-077), is still open.
@@ -28,8 +28,8 @@ from dataclasses import dataclass, field
 
 from fastapi import WebSocket, WebSocketDisconnect
 
-from moto_server.mock_stream import MockCanStreamer
-from moto_server.schemas.stream import StreamBatchDto, StreamMessageDto
+from vehicle_server.mock_stream import MockCanStreamer
+from vehicle_server.schemas.stream import StreamBatchDto, StreamMessageDto
 
 LIVE_SOURCES = ("none", "mock")
 QUEUE_BATCHES = 256  # ~5 s at the mock's 50 Hz
@@ -122,7 +122,7 @@ def _heartbeat(hub: LiveHub, sub: Subscriber) -> str:
 async def serve_client(websocket: WebSocket, hub: LiveHub, api_token: str | None) -> None:
     await websocket.accept()
     if api_token is None:
-        await websocket.close(CLOSE_NOT_CONFIGURED, "MOTO_API_TOKEN is not configured")
+        await websocket.close(CLOSE_NOT_CONFIGURED, "VEHICLE_API_TOKEN is not configured")
         return
     try:
         hello = json.loads(await asyncio.wait_for(websocket.receive_text(), HELLO_TIMEOUT_S))

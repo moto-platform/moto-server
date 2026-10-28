@@ -10,19 +10,19 @@ from pathlib import Path
 import pyarrow.parquet as pq
 import pytest
 
-from moto_server import ble_schema, index
-from moto_server.config import Settings
-from moto_server.decode import (
+from vehicle_server import ble_schema, index
+from vehicle_server.config import Settings
+from vehicle_server.decode import (
     SIGNALS_HEADER,
     ContractError,
     csv_column_for_field,
     decode_signals_csv,
     group_signal_blocks,
 )
-from moto_server.defs import ble as defs_ble
-from moto_server.defs import vehicle_catalog
-from moto_server.ingest import ingest_path
-from moto_server.report import render_text
+from vehicle_server.defs import ble as defs_ble
+from vehicle_server.defs import vehicle_catalog
+from vehicle_server.ingest import ingest_path
+from vehicle_server.report import render_text
 
 from .conftest import copy_fixture, zip_fixture
 

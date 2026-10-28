@@ -175,7 +175,7 @@ wheels = [
 ]
 
 [[package]]
-name = "moto-server"
+name = "vehicle-server"
 version = "0.6.0"
 source = { editable = "." }
 dependencies = [

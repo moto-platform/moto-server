@@ -1,6 +1,6 @@
 """Generic decoder for the BLE telemetry / IMU / GPS wire formats.
 
-Driven entirely by the schema from moto-vehicle-defs (``moto_defs.ble.SCHEMA``,
+Driven entirely by the schema from vehicle-defs (``vehicle_defs.ble.SCHEMA``,
 generated from ``ble/ble_schema.json``, D-061; there is no copy in this repo) --
 this module never hardcodes a byte offset. See platform rule #2: signal layouts
 come only from the schema.
@@ -13,7 +13,7 @@ import struct
 from functools import lru_cache
 from typing import Any
 
-from moto_server.defs import ble as defs_ble
+from vehicle_server.defs import ble as defs_ble
 
 _STRUCT_FORMAT = {
     "uint8": "B",
@@ -31,7 +31,7 @@ class DecodeError(ValueError):
 
 @lru_cache(maxsize=1)
 def load_default_schema() -> dict[str, Any]:
-    """The BLE schema of the pinned moto-vehicle-defs (``moto_defs.ble.SCHEMA``),
+    """The BLE schema of the pinned vehicle-defs (``vehicle_defs.ble.SCHEMA``),
     as a deep copy so callers can never mutate the generated module."""
     return copy.deepcopy(defs_ble.SCHEMA)
 

@@ -1,17 +1,17 @@
-"""Maps BLE telemetry signals to moto-vehicle-defs metadata (units, ranges).
+"""Maps BLE telemetry signals to vehicle-defs metadata (units, ranges).
 
 Signal identity: a BLE schema field with a ``defsSignal`` key (e.g. "rpm" ->
-"ENGINE_SPEED") names a moto_defs.vehicle_cl250.DIDS entry. We key everything
+"ENGINE_SPEED") names a vehicle_defs.vehicle_cl250.DIDS entry. We key everything
 by the lowercased defs signal name (e.g. "engine_speed"), which is also used
 verbatim as the parquet/report column prefix.
 """
 
 from __future__ import annotations
 
-from moto_server.defs import vehicle_catalog, vehicle_cl250
+from vehicle_server.defs import vehicle_catalog, vehicle_cl250
 
-# moto_defs.vehicle_cl250.DIDS[name] = (did, length, factor_num, factor_den,
-# offset, unit, min, max, poll_ms, ...) -- see gen/python/moto_defs/vehicle_cl250.py.
+# vehicle_defs.vehicle_cl250.DIDS[name] = (did, length, factor_num, factor_den,
+# offset, unit, min, max, poll_ms, ...) -- see gen/python/vehicle_defs/vehicle_cl250.py.
 # Only the indexes below are read here; trailing entries are ignored.
 _DID_ID = 0
 _DID_UNIT = 5

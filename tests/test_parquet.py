@@ -5,9 +5,9 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from moto_server.config import Settings
-from moto_server.decode import CAN_HEALTH_FIELDS, csv_column_for_field
-from moto_server.ingest import ingest_path
+from vehicle_server.config import Settings
+from vehicle_server.decode import CAN_HEALTH_FIELDS, csv_column_for_field
+from vehicle_server.ingest import ingest_path
 
 
 def test_telemetry_parquet_columns_and_session_id(settings: Settings, fixtures_dir: Path):

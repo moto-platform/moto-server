@@ -8,7 +8,7 @@ __pycache__/
 .ruff_cache/
 *.egg-info/
 
-# Runtime data (MOTO_DATA_DIR default)
+# Runtime data (VEHICLE_DATA_DIR default)
 /data/
 
 # Local-only overrides

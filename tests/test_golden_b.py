@@ -9,8 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from moto_server.defs import vehicle_cl250
-from moto_server.derived import golden, golden_b
+from vehicle_server.defs import vehicle_cl250
+from vehicle_server.derived import golden, golden_b
 
 
 @pytest.fixture(scope="module")
@@ -32,7 +32,7 @@ def test_files_are_in_the_manifest_set(generated):
 
 
 def test_selection_and_skips_are_complete(class_b):
-    from moto_server.defs import vehicle_derived
+    from vehicle_server.defs import vehicle_derived
 
     classes_b = {n for n, s in vehicle_derived.SIGNALS.items() if s["class"] == "B"}
     assert set(class_b.selected) | set(class_b.skipped) == classes_b

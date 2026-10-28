@@ -1,12 +1,12 @@
-"""The BLE schema comes from moto-vehicle-defs (D-061); this repo keeps no copy.
+"""The BLE schema comes from vehicle-defs (D-061); this repo keeps no copy.
 
-Replaces the old byte-equality drift test against moto-connectivity-node's copy.
+Replaces the old byte-equality drift test against vehicle-connectivity-node's copy.
 """
 
 from __future__ import annotations
 
-from moto_server import ble_schema, signals
-from moto_server.defs import ble as defs_ble
+from vehicle_server import ble_schema, signals
+from vehicle_server.defs import ble as defs_ble
 
 
 def test_loaded_schema_is_the_defs_schema():

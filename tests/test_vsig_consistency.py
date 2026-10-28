@@ -8,9 +8,9 @@ from pathlib import Path
 
 import pytest
 
-from moto_server.config import Settings
-from moto_server.defs import ble as defs_ble
-from moto_server.ingest import ingest_path
+from vehicle_server.config import Settings
+from vehicle_server.defs import ble as defs_ble
+from vehicle_server.ingest import ingest_path
 
 from .conftest import copy_fixture
 

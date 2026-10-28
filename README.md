@@ -1,35 +1,35 @@
-# moto-server
+# vehicle-server
 
-The server side of the moto-platform SDV stack (D-010): ingests ride sessions
-recorded by the phone app (`moto-mobile`), validates and decodes them against
+The server side of the vehicle-platform SDV stack (D-010): ingests ride sessions
+recorded by the phone app (`vehicle-mobile`), validates and decodes them against
 the BLE telemetry schema, and stores them as Parquet + a queryable index for
-`moto-ml` and analysis. Part of the [moto-platform](https://github.com/moto-platform)
-organization; see `moto-vehicle-defs/docs/ARCHITECTURE.md` for the platform picture.
+`vehicle-ml` and analysis. Part of the [vehicle-platform](https://github.com/vehicle-platform)
+organization; see `vehicle-defs/docs/ARCHITECTURE.md` for the platform picture.
 
 ## What this repo is not
 
-- No model training (`moto-ml` reads data from here).
+- No model training (`vehicle-ml` reads data from here).
 - Never sends commands to the vehicle; it only stores and serves data.
 - No MDF4 export yet (skeleton only, see `mdf4.py`).
 
 ## Setup
 
 ```bash
-git submodule update --init --recursive   # external/moto-vehicle-defs, pinned to v0.19.0
+git submodule update --init --recursive   # external/vehicle-defs, pinned to v0.19.0
 uv sync                                    # installs runtime + dev dependencies
 ```
 
 ## Run
 
 ```bash
-export MOTO_API_TOKEN=some-long-random-token   # required; the API refuses (503) without it
-uv run moto-server serve                       # http://0.0.0.0:8000
+export VEHICLE_API_TOKEN=some-long-random-token   # required; the API refuses (503) without it
+uv run vehicle-server serve                       # http://0.0.0.0:8000
 ```
 
 Or with Docker Compose (builds the image, mounts a named volume for `/data`):
 
 ```bash
-MOTO_API_TOKEN=some-long-random-token docker compose up --build
+VEHICLE_API_TOKEN=some-long-random-token docker compose up --build
 ```
 
 A deployment exposed outside a trusted network needs TLS in front of it (e.g.
@@ -38,13 +38,13 @@ a reverse proxy) -- the API itself only does bearer-token auth, not TLS.
 ## CLI
 
 ```bash
-uv run moto-server import <folder-or-zip>      # ingest a session, print its report
-uv run moto-server report <session_id>         # re-print a stored session's report
-uv run moto-server report <session_id> --format json
-uv run moto-server list                        # one line per ingested session
-uv run moto-server derive <session_id>         # recompute the derived signals and ride summaries of a stored session
-uv run moto-server derive --all                # ... of every stored session
-uv run moto-server serve [--host] [--port] [--reload]
+uv run vehicle-server import <folder-or-zip>      # ingest a session, print its report
+uv run vehicle-server report <session_id>         # re-print a stored session's report
+uv run vehicle-server report <session_id> --format json
+uv run vehicle-server list                        # one line per ingested session
+uv run vehicle-server derive <session_id>         # recompute the derived signals and ride summaries of a stored session
+uv run vehicle-server derive --all                # ... of every stored session
+uv run vehicle-server serve [--host] [--port] [--reload]
 ```
 
 `import` and `report` exit 0 for status `ok`/`warn`, 1 for `fail` or an
@@ -52,16 +52,16 @@ invalid session, 2 for a session-id conflict (same id, different content).
 
 ## HTTP API
 
-All endpoints except `GET /health` require `Authorization: Bearer $MOTO_API_TOKEN`.
+All endpoints except `GET /health` require `Authorization: Bearer $VEHICLE_API_TOKEN`.
 
 | Method & path | Description |
 |---|---|
 | `GET /health` | Liveness check, no auth. |
-| `POST /sessions` | Multipart field `archive` (a session `.zip`). `201` created, `200` identical re-upload (idempotent), `409` same id/different content, `422` invalid session, `413` over `MOTO_MAX_UPLOAD_MB`. |
+| `POST /sessions` | Multipart field `archive` (a session `.zip`). `201` created, `200` identical re-upload (idempotent), `409` same id/different content, `422` invalid session, `413` over `VEHICLE_MAX_UPLOAD_MB`. |
 | `GET /sessions` | List ingested sessions from the index. |
 | `GET /sessions/{id}/report` | The session's `report.json`. Add `?format=text` for a human-readable summary. `404` for an unknown id. |
 | `GET /sessions/{id}/series` | Downsampled time series for the analyzer oscilloscope/replay. Query: `signals` (comma-separated `did.<NAME>`, `sensor.<name>`, `derived.<signal>`; default all available), `max_points` (10..20000, default 2000; min/max buckets so spikes survive), `from_ms`/`to_ms` (inclusive window relative to `t0_device_ms`, applied before downsampling). Returns `{session_id, t0_device_ms, max_points, series: [{name, kind, unit, points_total, downsampled, t_ms, v}]}`; `t0_device_ms` is the earliest sample of any series of the session, so calls share one time axis. `404` unknown session, `422` unknown series name or `max_points` out of range. Never contains a GPS position. |
-| `GET /ws/live` (WebSocket) | Live stream for moto-analyzer (D-081). First message `{"type": "hello", "token": "<MOTO_API_TOKEN>"}` within 5 s, optional frame filters `"channels": [1, 2]` and `"ids": [...]`; the token is never put in the URL. Then `{"type": "batch", "payload": StreamBatchDto}` messages and every 5 s `{"type": "heartbeat", "payload": {"source", "dropped", "timestamp_us"}}`. Close `1008` bad hello or token, `1011` no `MOTO_API_TOKEN`. One bounded queue per client: a slow client loses its oldest batches (`dropped`), never blocks the others. |
+| `GET /ws/live` (WebSocket) | Live stream for vehicle-analyzer (D-081). First message `{"type": "hello", "token": "<VEHICLE_API_TOKEN>"}` within 5 s, optional frame filters `"channels": [1, 2]` and `"ids": [...]`; the token is never put in the URL. Then `{"type": "batch", "payload": StreamBatchDto}` messages and every 5 s `{"type": "heartbeat", "payload": {"source", "dropped", "timestamp_us"}}`. Close `1008` bad hello or token, `1011` no `VEHICLE_API_TOKEN`. One bounded queue per client: a slow client loses its oldest batches (`dropped`), never blocks the others. |
 
 A session upload is a zip with `meta.json`, `telemetry.csv`, `events.csv`,
 `summary.json` (and optional `imu.csv`, `gps.csv` and `signals.csv`) either at the zip root or inside one
@@ -70,7 +70,7 @@ top-level folder -- see the session contract the phone app writes to.
 ## Storage layout
 
 ```
-$MOTO_DATA_DIR/
+$VEHICLE_DATA_DIR/
   index.sqlite                     # one row per ingested session (has_imu, has_gps, has_vehicle_signals, has_derived)
   sessions/<session_id>/
     raw/                           # the uploaded files, verbatim
@@ -86,8 +86,8 @@ $MOTO_DATA_DIR/
 Parquet column names follow `<defs signal>_<unit>` (e.g. `engine_speed_rpm`,
 `vehicle_speed_kmh`, `coolant_temp_degc`, `throttle_pos_pct`,
 `battery_voltage_v`), with `<signal>_age_ms` and `<signal>_valid` alongside
-each. Units come from `moto_defs.vehicle_cl250.DIDS`, never hand-written
-(platform rule: signals only come from moto-vehicle-defs).
+each. Units come from `vehicle_defs.vehicle_cl250.DIDS`, never hand-written
+(platform rule: signals only come from vehicle-defs).
 
 Telemetry version 4 (D-058) adds eight tester-statistics columns at the end of
 `telemetry.csv` (`step_gap_max_ms`, `step_gap_over_count`, `rtt_did`, `rtt_min_ms`,
@@ -108,7 +108,7 @@ covering: which telemetry layout (v2/v3/v4) and packet versions were seen, the
 defs version used to decode it, a raw_hex re-decode vs. the app's own decoded
 columns (consistency check), packet loss recomputed from `seq`, rx/device
 time ordering and gaps, per-signal range and validity checks against
-`moto_defs.vehicle_cl250.DIDS`, CAN health (v3), tester stats (v4), IMU
+`vehicle_defs.vehicle_cl250.DIDS`, CAN health (v3), tester stats (v4), IMU
 sample-loss/scale checks (recomputed from `sample_index` and `*_raw`, including
 `sensorReconfigured` blocks), a GPS summary and a vehicle-signal summary (see below). Overall status is
 `ok` / `warn` / `fail`.
@@ -124,19 +124,19 @@ not change the session status.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `MOTO_DATA_DIR` | `./data` | Root of all stored session data and the SQLite index. |
-| `MOTO_API_TOKEN` | *(none)* | Bearer token for every endpoint except `/health`. Protected endpoints return `503` if unset. |
-| `MOTO_MAX_UPLOAD_MB` | `100` | Maximum accepted `POST /sessions` upload size. |
-| `MOTO_CORS_ORIGINS` | *(empty)* | Comma-separated browser origins allowed to call the API (e.g. `http://localhost:5173` for moto-analyzer). Empty: no CORS middleware. Methods GET/POST, headers Authorization + Content-Type, no credentials. |
-| `MOTO_LIVE_SOURCE` | `none` | Producer of `/ws/live`: `none` (heartbeats only) or `mock` (synthetic frames built from defs by `mock_stream.py`; the heartbeat says `"source": "mock"`). The real source (rt-core via the Raspi, D-077) is not built yet. |
+| `VEHICLE_DATA_DIR` | `./data` | Root of all stored session data and the SQLite index. |
+| `VEHICLE_API_TOKEN` | *(none)* | Bearer token for every endpoint except `/health`. Protected endpoints return `503` if unset. |
+| `VEHICLE_MAX_UPLOAD_MB` | `100` | Maximum accepted `POST /sessions` upload size. |
+| `VEHICLE_CORS_ORIGINS` | *(empty)* | Comma-separated browser origins allowed to call the API (e.g. `http://localhost:5173` for vehicle-analyzer). Empty: no CORS middleware. Methods GET/POST, headers Authorization + Content-Type, no credentials. |
+| `VEHICLE_LIVE_SOURCE` | `none` | Producer of `/ws/live`: `none` (heartbeats only) or `mock` (synthetic frames built from defs by `mock_stream.py`; the heartbeat says `"source": "mock"`). The real source (rt-core via the Raspi, D-077) is not built yet. |
 
 ## BLE schema
 
 The BLE packet layouts (telemetry versions 2, 3 and 4, the IMU, GPS and vehicle-signal blocks) come from
-moto-vehicle-defs: `moto_defs.ble.SCHEMA`, generated from its `ble/ble_schema.json`
+vehicle-defs: `vehicle_defs.ble.SCHEMA`, generated from its `ble/ble_schema.json`
 (D-061). This repo keeps no copy and no drift test; `ble_schema.load_default_schema()`
 returns a deep copy of it and the decoder dispatches on the packet's `version` byte. A
-layout change is a defs release; bump the `external/moto-vehicle-defs` pin to take it.
+layout change is a defs release; bump the `external/vehicle-defs` pin to take it.
 
 ## GPS (speed and heading only)
 
@@ -178,12 +178,12 @@ wire values `did`, `state` (`BleVehicleSignalState`: 0 neverReceived, 1 valid, 2
 3 skipped, 4 negativeResponse), `age_ms` (sentinels `65535` = no positive answer since
 boot, `65534` = saturated) and `raw` (the data bytes as an unsigned big-endian number for
 state 1 and 2, the NRC for state 4) are authoritative. `signal` and `value` are the app's
-catalog decode. The contract source is moto-mobile's `docs/session-format.md`; the header
+catalog decode. The contract source is vehicle-mobile's `docs/session-format.md`; the header
 must match exactly (any other column is rejected).
 
 The server validates the wire values against the schema field sizes (`did` and `age_ms`
 u16, `raw` u32, `state` a known value) and re-derives `signal` and `value` from `did` +
-`raw` with the generated vehicle catalog (`moto_defs.vehicle_catalog`: `BY_DID`, `SIGNALS`,
+`raw` with the generated vehicle catalog (`vehicle_defs.vehicle_catalog`: `BY_DID`, `SIGNALS`,
 `decode`), `raw * factor_num / factor_den + offset`, only for state 1 or 2 and a raw that
 fits the DID's `length`. The app's columns are a consistency check (a mismatch makes the
 session `warn`). A DID missing from the pinned catalog (a sender built from a newer defs)
@@ -209,9 +209,9 @@ engine data only (no position), so the D-063 local-only rule for `gps.csv` does 
 
 ## Derived signals (D-070 item 2)
 
-`moto_defs.vehicle_derived` defines the derived signals (class A live on rt-core, B per ride,
+`vehicle_defs.vehicle_derived` defines the derived signals (class A live on rt-core, B per ride,
 C across rides, D server only). Until rt-core exists the Python reference in
-`src/moto_server/derived/` computes them offline from a stored session:
+`src/vehicle_server/derived/` computes them offline from a stored session:
 
 - `inputs.py`: one series per input on the node's `device_time_ms`. `did.<NAME>` rows come
   from `signals.parquet` (`signal == NAME`, `value` set, at `sample_device_time_ms`; the five
@@ -219,7 +219,7 @@ C across rides, D server only). Until rt-core exists the Python reference in
   through `SENSORS[name]["phase0"]` (`ble.imuBlock.ax` -> `imu.parquet` `ax_g`, converted to
   m/s2 with standard gravity; `ble.gpsBlock.*` -> `gps.parquet`, speed, speed accuracy,
   heading of motion and fix type only, never a position); `const.<name>` is
-  `moto_defs.vehicle_constants`. Sensors the server does not store (e.g. `lean_angle`) are
+  `vehicle_defs.vehicle_constants`. Sensors the server does not store (e.g. `lean_angle`) are
   `missing_inputs`; the tester and CAN health counters come from `telemetry.parquet`.
 - `engine.py`: topological order over `derived.*` inputs; the output grid is the signal's
   `period_ms` from the span where all inputs exist. An input counts while its age is within
@@ -267,11 +267,11 @@ used, `summary` (count per status), `rows` / `valid_rows` and, per signal of the
 `not_ready` (`reason` `ready_phase0` / `pending_inputs`), `missing_inputs` (`missing`) or
 `error` (`message`). It is computed during ingest after the parquet step; an exception is
 recorded as `derived: {"error": ...}`, leaves the ingest status unchanged and writes no
-`derived.parquet`. `moto-server derive` recomputes it after a defs bump or a formula change.
+`derived.parquet`. `vehicle-server derive` recomputes it after a defs bump or a formula change.
 
 ### Ride summaries (class B, part 3)
 
-`src/moto_server/derived/summary.py` evaluates the class-B signals after the class-A pass.
+`src/vehicle_server/derived/summary.py` evaluates the class-B signals after the class-A pass.
 Phase 0 has no ride segmentation: **one stored session is one ride** (the report says
 `ride_definition: "session"`). A summary reads the valid rows of its class-A inputs, the scalar
 results of its class-B inputs (`ride_fuel_consumption` follows `ride_fuel_used` and
@@ -330,18 +330,18 @@ absent), `value` (float64, null when invalid), `unit`, `valid`, `flag`. The repo
 `flag`, a binned one `status` / `unit` / `cells` / `nonzero_cells` / `total_s` / `outside_s`
 (no per-cell values), the others `reason` / `missing` / `message`. It is computed right after
 the class-A step; an exception is recorded as `derived_summary: {"error": ...}`, writes no file
-and never fails the ingest. The file is removed when there is no row. `moto-server derive`
+and never fails the ingest. The file is removed when there is no row. `vehicle-server derive`
 recomputes both files and prints one more line per session. There is no index column.
 
 ## Golden vectors for rt-core (D-070 item 2)
 
-`src/moto_server/derived/golden.py` runs the Python reference over four synthetic
+`src/vehicle_server/derived/golden.py` runs the Python reference over four synthetic
 scenarios (`idle_warmup`, `accel_gears`, `stale_gap`, `edge_values`; no GPS, no real ride,
 no randomness) and writes the inputs and the expected outputs as C99 headers for the
-moto-rt-core host tests:
+vehicle-rt-core host tests:
 
 ```bash
-uv run moto-server golden --out <moto-rt-core>/tests/host/vectors   # also python -m moto_server.derived.golden
+uv run vehicle-server golden --out <vehicle-rt-core>/tests/host/vectors   # also python -m vehicle_server.derived.golden
 ```
 
 - Defs version: the headers record the defs version they were generated from (v0.19.0 now).

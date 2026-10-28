@@ -5,9 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from moto_server.config import Settings
-from moto_server.decode import ContractError
-from moto_server.ingest import InvalidSessionError, SessionConflictError, ingest_path
+from vehicle_server.config import Settings
+from vehicle_server.decode import ContractError
+from vehicle_server.ingest import InvalidSessionError, SessionConflictError, ingest_path
 
 from .conftest import copy_fixture, zip_fixture
 

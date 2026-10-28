@@ -1,10 +1,10 @@
-"""can_codec adapter over the generated moto_defs.platform tables."""
+"""can_codec adapter over the generated vehicle_defs.platform tables."""
 
 from __future__ import annotations
 
 import pytest
 
-from moto_server.can_codec import pack_raw, platform, platform_messages, unpack_raw
+from vehicle_server.can_codec import pack_raw, platform, platform_messages, unpack_raw
 
 
 def test_every_platform_message_is_adapted():

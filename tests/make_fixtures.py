@@ -15,10 +15,10 @@ import csv
 import json
 from pathlib import Path
 
-from moto_server import ble_schema
-from moto_server.decode import GPS_HEADER, SIGNALS_HEADER, V4_EXTRA_HEADER
-from moto_server.defs import ble as defs_ble
-from moto_server.defs import vehicle_catalog, vehicle_cl250
+from vehicle_server import ble_schema
+from vehicle_server.decode import GPS_HEADER, SIGNALS_HEADER, V4_EXTRA_HEADER
+from vehicle_server.defs import ble as defs_ble
+from vehicle_server.defs import vehicle_catalog, vehicle_cl250
 
 FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
 SCHEMA = ble_schema.load_default_schema()

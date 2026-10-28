@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from moto_server.config import Settings
+from vehicle_server.config import Settings
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 

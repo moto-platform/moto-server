@@ -9,7 +9,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      # moto-vehicle-defs is public (D-033): the submodule needs no secret.
+      # vehicle-defs is public (D-033): the submodule needs no secret.
       - uses: actions/checkout@v4
         with:
           submodules: recursive
@@ -17,9 +17,9 @@ jobs:
       # D-003/D-036: consumers pin defs to a release tag, never a branch commit.
       - name: Defs pin must be a release tag
         run: |
-          git -C external/moto-vehicle-defs fetch --quiet --depth=1 origin '+refs/tags/*:refs/tags/*'
-          tag=$(git -C external/moto-vehicle-defs tag --points-at HEAD | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true)
-          test -n "$tag" || { echo "::error::external/moto-vehicle-defs is not pinned to a vX.Y.Z release tag"; exit 1; }
+          git -C external/vehicle-defs fetch --quiet --depth=1 origin '+refs/tags/*:refs/tags/*'
+          tag=$(git -C external/vehicle-defs tag --points-at HEAD | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true)
+          test -n "$tag" || { echo "::error::external/vehicle-defs is not pinned to a vX.Y.Z release tag"; exit 1; }
           echo "defs pin: $tag"
 
       - name: Install uv
@@ -42,4 +42,4 @@ jobs:
       - name: Docker Compose config (smoke check)
         run: docker compose config
         env:
-          MOTO_API_TOKEN: ci-smoke-check-placeholder
+          VEHICLE_API_TOKEN: ci-smoke-check-placeholder

@@ -1,4 +1,4 @@
-"""SQLite index of ingested sessions ($MOTO_DATA_DIR/index.sqlite)."""
+"""SQLite index of ingested sessions ($VEHICLE_DATA_DIR/index.sqlite)."""
 
 from __future__ import annotations
 

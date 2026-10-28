@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import pytest
 
-from moto_server import ble_schema
-from moto_server.decode import CAN_HEALTH_FIELDS, V4_EXTRA_HEADER, csv_column_for_field
-from moto_server.defs import ble as defs_ble
+from vehicle_server import ble_schema
+from vehicle_server.decode import CAN_HEALTH_FIELDS, V4_EXTRA_HEADER, csv_column_for_field
+from vehicle_server.defs import ble as defs_ble
 
 SCHEMA = ble_schema.load_default_schema()
 

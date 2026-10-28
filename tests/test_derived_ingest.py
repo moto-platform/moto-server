@@ -10,14 +10,14 @@ from pathlib import Path
 import pyarrow.parquet as pq
 import pytest
 
-from moto_server import ble_schema, cli, derived, index
-from moto_server.config import Settings
-from moto_server.decode import IMU_HEADER
-from moto_server.defs import vehicle_derived
-from moto_server.derived import engine
-from moto_server.derived.inputs import SessionInputs, _to_series, _unwrap, resolve_sensor
-from moto_server.ingest import ingest_path, rederive_session
-from moto_server.report import render_text
+from vehicle_server import ble_schema, cli, derived, index
+from vehicle_server.config import Settings
+from vehicle_server.decode import IMU_HEADER
+from vehicle_server.defs import vehicle_derived
+from vehicle_server.derived import engine
+from vehicle_server.derived.inputs import SessionInputs, _to_series, _unwrap, resolve_sensor
+from vehicle_server.ingest import ingest_path, rederive_session
+from vehicle_server.report import render_text
 
 from .conftest import copy_fixture
 from .make_fixtures import write_csv
@@ -373,7 +373,7 @@ def test_has_derived_is_added_to_an_existing_index(tmp_path: Path):
 
 
 def _run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, argv: list[str]) -> int:
-    monkeypatch.setenv("MOTO_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("VEHICLE_DATA_DIR", str(tmp_path / "data"))
     with pytest.raises(SystemExit) as exc_info:
         cli.main(argv)
     return exc_info.value.code

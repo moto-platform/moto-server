@@ -1,4 +1,4 @@
-"""GET /ws/live and the LiveHub fan-out (moto_server.stream)."""
+"""GET /ws/live and the LiveHub fan-out (vehicle_server.stream)."""
 
 from __future__ import annotations
 
@@ -9,10 +9,10 @@ import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
-from moto_server import stream
-from moto_server.api import create_app
-from moto_server.config import Settings
-from moto_server.schemas.stream import CanFrameDto, StreamBatchDto
+from vehicle_server import stream
+from vehicle_server.api import create_app
+from vehicle_server.config import Settings
+from vehicle_server.schemas.stream import CanFrameDto, StreamBatchDto
 
 HELLO = {"type": "hello", "token": "test-token"}
 

@@ -1,9 +1,9 @@
-"""Bridge to the moto-vehicle-defs submodule (external/moto-vehicle-defs).
+"""Bridge to the vehicle-defs submodule (external/vehicle-defs).
 
-moto-vehicle-defs is the single source of truth for signals (CAN IDs, DIDs,
+vehicle-defs is the single source of truth for signals (CAN IDs, DIDs,
 scales, VSS paths). This repo never copies or vendors its generated code
 (platform rule #2); instead it adds the submodule's ``gen/python`` directory
-to ``sys.path`` and imports ``moto_defs`` from there. ``gen/python`` ships as
+to ``sys.path`` and imports ``vehicle_defs`` from there. ``gen/python`` ships as
 a plain package with no ``pyproject.toml`` of its own, so a path injection is
 the simplest approach that also works unmodified in Docker and CI, where the
 submodule is checked out at the same relative location.
@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_DEFS_ROOT = _REPO_ROOT / "external" / "moto-vehicle-defs"
+_DEFS_ROOT = _REPO_ROOT / "external" / "vehicle-defs"
 _DEFS_PYTHON = _DEFS_ROOT / "gen" / "python"
 _FALLBACK_VERSION_FILE = Path(__file__).resolve().parent / "defs_pin.txt"
 
@@ -24,8 +24,8 @@ if _DEFS_PYTHON.is_dir() and str(_DEFS_PYTHON) not in sys.path:
     sys.path.insert(0, str(_DEFS_PYTHON))
 
 try:
-    import moto_defs  # noqa: E402
-    from moto_defs import (  # noqa: E402
+    import vehicle_defs  # noqa: E402
+    from vehicle_defs import (  # noqa: E402
         ble,
         vehicle_catalog,
         vehicle_cl250,
@@ -34,14 +34,14 @@ try:
     )
 except ImportError as exc:  # pragma: no cover - fails fast at startup
     raise ImportError(
-        "moto_defs could not be imported from "
+        "vehicle_defs could not be imported from "
         f"{_DEFS_PYTHON}. Did you run "
         "`git submodule update --init --recursive`?"
     ) from exc
 
 
 def defs_version() -> str:
-    """Version of the pinned moto-vehicle-defs submodule.
+    """Version of the pinned vehicle-defs submodule.
 
     Tries ``git describe --tags`` on the submodule checkout first (accurate
     for any local checkout, including a moved tag); falls back to the
@@ -70,7 +70,7 @@ def defs_version() -> str:
 
 
 __all__ = [
-    "moto_defs",
+    "vehicle_defs",
     "ble",
     "vehicle_catalog",
     "vehicle_cl250",

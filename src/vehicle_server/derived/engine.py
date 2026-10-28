@@ -1,6 +1,6 @@
 """Evaluates the derived signals of a session in dependency order (D-070 item 2).
 
-For every signal of moto_defs.vehicle_derived.SIGNALS the engine decides a status:
+For every signal of vehicle_defs.vehicle_derived.SIGNALS the engine decides a status:
     computed         a formula exists and its inputs have a common span in this session
     not_implemented  class B/C/D, an event signal, or no formula in formulas.py yet
     not_ready        ready_phase0 is False or pending_inputs is set (never evaluated)
@@ -23,16 +23,16 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from moto_server.defs import vehicle_cl250, vehicle_constants, vehicle_derived
-from moto_server.derived.context import (
+from vehicle_server.defs import vehicle_cl250, vehicle_constants, vehicle_derived
+from vehicle_server.derived.context import (
     FLAG_OUT_OF_RANGE,
     At,
     Env,
     Feed,
     InputInvalid,
 )
-from moto_server.derived.formulas import FORMULAS, Formula
-from moto_server.derived.inputs import Series
+from vehicle_server.derived.formulas import FORMULAS, Formula
+from vehicle_server.derived.inputs import Series
 
 COMPUTED = "computed"
 NOT_IMPLEMENTED = "not_implemented"

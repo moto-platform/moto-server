@@ -12,8 +12,8 @@ import csv
 from pathlib import Path
 from typing import Any
 
-from moto_server import ble_schema, signals
-from moto_server.decode import (
+from vehicle_server import ble_schema, signals
+from vehicle_server.decode import (
     VSIG_NEGATIVE_RESPONSE,
     VSIG_VALID,
     decode_gps_csv,
@@ -23,8 +23,8 @@ from moto_server.decode import (
     decoded_tester_columns,
     group_signal_blocks,
 )
-from moto_server.defs import ble as defs_ble
-from moto_server.defs import defs_version
+from vehicle_server.defs import ble as defs_ble
+from vehicle_server.defs import defs_version
 
 # rx_mono_ms / device_time_ms gaps larger than this multiple of notifyPeriodMs
 # are reported (schema rule referenced by the ingest contract).

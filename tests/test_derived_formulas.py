@@ -6,11 +6,11 @@ import math
 
 import pytest
 
-from moto_server.defs import vehicle_catalog, vehicle_cl250, vehicle_constants, vehicle_derived
-from moto_server.derived import engine
-from moto_server.derived.context import InputInvalid
-from moto_server.derived.formulas import FORMULAS
-from moto_server.derived.inputs import STANDARD_GRAVITY_MPS2, resolve_sensor
+from vehicle_server.defs import vehicle_catalog, vehicle_cl250, vehicle_constants, vehicle_derived
+from vehicle_server.derived import engine
+from vehicle_server.derived.context import InputInvalid
+from vehicle_server.derived.formulas import FORMULAS
+from vehicle_server.derived.inputs import STANDARD_GRAVITY_MPS2, resolve_sensor
 
 from .derived_helpers import FakeInputs, const_series, env_for, point_value, ramp
 

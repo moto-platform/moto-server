@@ -16,8 +16,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from moto_server import ble_schema, signals
-from moto_server.defs import ble as defs_ble
+from vehicle_server import ble_schema, signals
+from vehicle_server.defs import ble as defs_ble
 
 V2_HEADER = [
     "rx_utc_iso",
@@ -74,7 +74,7 @@ V4_EXTRA_HEADER = [
 V4_HEADER = V3_HEADER + V4_EXTRA_HEADER
 # The version 3 CAN health fields (schema `canHealth`). telemetry.parquet stores them under
 # the schema field names in snake_case (can_tx_error_count, not the csv's can_tec), so the
-# derived-signal sensors (moto_defs.vehicle_derived.SENSORS, `ble.telemetry.<field>`) find
+# derived-signal sensors (vehicle_defs.vehicle_derived.SENSORS, `ble.telemetry.<field>`) find
 # them; test_ble_schema checks that every name exists in the schema.
 CAN_HEALTH_FIELDS = (
     "canBusState",

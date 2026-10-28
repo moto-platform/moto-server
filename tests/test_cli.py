@@ -5,11 +5,11 @@ from pathlib import Path
 
 import pytest
 
-from moto_server import cli
+from vehicle_server import cli
 
 
 def _run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, argv: list[str]) -> int:
-    monkeypatch.setenv("MOTO_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("VEHICLE_DATA_DIR", str(tmp_path / "data"))
     with pytest.raises(SystemExit) as exc_info:
         cli.main(argv)
     return exc_info.value.code

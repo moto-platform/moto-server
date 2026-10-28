@@ -6,11 +6,11 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from moto_server import series
-from moto_server.api import create_app
-from moto_server.config import Settings
-from moto_server.defs import vehicle_catalog
-from moto_server.ingest import ingest_path
+from vehicle_server import series
+from vehicle_server.api import create_app
+from vehicle_server.config import Settings
+from vehicle_server.defs import vehicle_catalog
+from vehicle_server.ingest import ingest_path
 
 from .conftest import copy_fixture
 

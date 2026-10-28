@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import pytest
 
-from moto_server.defs import vehicle_cl250, vehicle_derived
-from moto_server.derived import engine
-from moto_server.derived.context import At
-from moto_server.derived.formulas import Formula
+from vehicle_server.defs import vehicle_cl250, vehicle_derived
+from vehicle_server.derived import engine
+from vehicle_server.derived.context import At
+from vehicle_server.derived.formulas import Formula
 
 from .derived_helpers import FakeInputs, const_series, ramp
 

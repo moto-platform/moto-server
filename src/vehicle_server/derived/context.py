@@ -12,7 +12,7 @@ from __future__ import annotations
 from bisect import bisect_right
 from dataclasses import dataclass
 
-from moto_server.derived.inputs import constant
+from vehicle_server.derived.inputs import constant
 
 FLAG_STALE_INPUT = "stale_input"
 FLAG_INVALID_INPUT = "invalid_input"
