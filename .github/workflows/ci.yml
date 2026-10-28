@@ -21,6 +21,8 @@ jobs:
           tag=$(git -C external/vehicle-defs tag --points-at HEAD | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true)
           test -n "$tag" || { echo "::error::external/vehicle-defs is not pinned to a vX.Y.Z release tag"; exit 1; }
           echo "defs pin: $tag"
+          # The Docker fallback reports this file when the image has no .git (ISSUES E-25 (1)).
+          test "$(cat src/vehicle_server/defs_pin.txt)" = "$tag" || { echo "::error::src/vehicle_server/defs_pin.txt does not name the defs pin $tag"; exit 1; }
 
       - name: Install uv
         uses: astral-sh/setup-uv@v3
