@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -265,3 +266,12 @@ def test_cli_export(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fixtures_di
 def test_cli_export_unknown_session(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys):
     assert _run(monkeypatch, tmp_path, ["export", "00000000-000000-ffff"]) == 1
     assert "error:" in capsys.readouterr().err
+
+
+def test_cli_export_without_the_extra(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys):
+    monkeypatch.setitem(sys.modules, "asammdf", None)
+    monkeypatch.delitem(sys.modules, "vehicle_server.mdf4")
+    assert _run(monkeypatch, tmp_path, ["export", "00000000-000000-ffff"]) == 1
+    err = capsys.readouterr().err
+    assert "asammdf is missing" in err
+    assert "uv sync --extra mdf4" in err

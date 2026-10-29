@@ -19,6 +19,10 @@ git submodule update --init --recursive   # external/vehicle-defs, pinned to v0.
 uv sync                                    # installs runtime + dev dependencies
 ```
 
+The `export` command (MDF4) needs the optional `mdf4` extra: `uv sync --extra mdf4`
+(the dev group already includes it). It pulls in asammdf, which is LGPL-3.0+, so the
+default install and the Docker image leave it out (D-091).
+
 ## Run
 
 ```bash

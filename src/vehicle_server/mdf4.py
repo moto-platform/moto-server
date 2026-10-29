@@ -2,7 +2,8 @@
 
 MDF4 is the archive/sharing format (phase0 plan section 3.3) next to the Parquet
 outputs: ``<session_dir>/parquet/<session_dir.name>.mf4``. Parquet remains the
-ML source; MDF4 is for cross-tool exchange.
+ML source; MDF4 is for cross-tool exchange. Needs the optional ``mdf4`` extra
+(asammdf, LGPL-3.0+, kept out of the default install and the image, D-091).
 
 Channel groups:
 

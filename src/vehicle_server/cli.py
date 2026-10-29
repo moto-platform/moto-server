@@ -111,7 +111,15 @@ def _cmd_golden(args: argparse.Namespace) -> int:
 
 
 def _cmd_export(args: argparse.Namespace) -> int:
-    from vehicle_server.mdf4 import export_mdf4
+    try:
+        from vehicle_server.mdf4 import export_mdf4
+    except ModuleNotFoundError as exc:
+        print(
+            f"error: MDF4 export needs the mdf4 extra ({exc.name} is missing): "
+            "uv sync --extra mdf4",
+            file=sys.stderr,
+        )
+        return EXIT_FAIL_OR_ERROR
 
     settings = load_settings()
     session_dir = settings.sessions_dir / args.session_id
