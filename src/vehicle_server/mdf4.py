@@ -68,8 +68,6 @@ _POSITION_TOKENS = frozenset(
         "height",
         "hmsl",
         "ecef",
-        "pos",
-        "position",
     }
 )
 
@@ -82,7 +80,10 @@ class _GroupResult:
 
 
 def _is_position_column(column: str) -> bool:
-    """Whether a column name looks like a GPS position (D-076). Kept isolated for review."""
+    """Whether a column name looks like a GPS position (D-076). Kept isolated for review.
+
+    "pos"/"position" are not tokens: they name non-GPS signals such as ``throttle_pos_pct``.
+    """
     tokens = set(re.split(r"[^a-z0-9]+", column.lower()))
     return bool(tokens & _POSITION_TOKENS)
 

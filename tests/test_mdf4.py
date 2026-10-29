@@ -185,6 +185,17 @@ def test_position_is_gated_by_the_flag(tmp_path: Path):
         assert "altitude_m" in mdf.channels_db
 
 
+def test_no_defs_column_is_mistaken_for_position():
+    schema = mdf4.ble_schema.load_default_schema()
+    columns = {
+        **mdf4._known_units(schema),
+        **mdf4._imu_units(schema),
+        **mdf4._gps_units(schema),
+    }
+    assert "throttle_pos_pct" in columns
+    assert [name for name in columns if mdf4._is_position_column(name)] == []
+
+
 def test_missing_imu_is_skipped(tmp_path: Path):
     session_dir = _write_session(tmp_path)
     (session_dir / "parquet" / "imu.parquet").unlink()
