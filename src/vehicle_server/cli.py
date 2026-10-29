@@ -1,4 +1,4 @@
-"""Command-line entry point: `vehicle-server import|serve|report|list|derive|golden`."""
+"""Command-line entry point: `vehicle-server import|serve|report|list|derive|golden|export`."""
 
 from __future__ import annotations
 
@@ -110,6 +110,28 @@ def _cmd_golden(args: argparse.Namespace) -> int:
     return golden.run(args.out, args.manifest)
 
 
+def _cmd_export(args: argparse.Namespace) -> int:
+    try:
+        from vehicle_server.mdf4 import export_mdf4
+    except ModuleNotFoundError as exc:
+        print(
+            f"error: MDF4 export needs the mdf4 extra ({exc.name} is missing): "
+            "uv sync --extra mdf4",
+            file=sys.stderr,
+        )
+        return EXIT_FAIL_OR_ERROR
+
+    settings = load_settings()
+    session_dir = settings.sessions_dir / args.session_id
+    try:
+        output = export_mdf4(session_dir, include_position=args.include_position)
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_FAIL_OR_ERROR
+    print(output)
+    return EXIT_OK_OR_WARN
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="vehicle-server")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -146,6 +168,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     golden.add_arguments(golden_parser)
     golden_parser.set_defaults(func=_cmd_golden)
+
+    export_parser = subparsers.add_parser(
+        "export", help="write a session's MDF4 archive next to its parquet files"
+    )
+    export_parser.add_argument("session_id")
+    export_parser.add_argument(
+        "--include-position",
+        action="store_true",
+        help="include GPS position columns (off by default, D-076)",
+    )
+    export_parser.set_defaults(func=_cmd_export)
 
     return parser
 

@@ -12,6 +12,11 @@ dependencies = [
     "pyarrow>=17.0",
 ]
 
+[project.optional-dependencies]
+# MDF4 export (mdf4.py). asammdf is LGPL-3.0+, so it stays out of the default
+# install and the Docker image (D-091).
+mdf4 = ["asammdf>=8.8.28"]
+
 [project.scripts]
 vehicle-server = "vehicle_server.cli:main"
 
@@ -24,6 +29,7 @@ dev = [
     "pytest>=8.0",
     "httpx>=0.27",
     "ruff>=0.6",
+    "asammdf>=8.8.28",  # same pin as the mdf4 extra, so tests cover the export
 ]
 
 [tool.ruff]

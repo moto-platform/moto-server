@@ -59,9 +59,13 @@ def unit_suffix(unit: str) -> str:
     return "".join(ch for ch in unit.lower() if ch.isalnum()) or "unit"
 
 
+def physical_unit(defs_signal: str) -> str:
+    """The physical unit of a defs signal (from the generated DIDS table)."""
+    return vehicle_cl250.DIDS[defs_signal][_DID_UNIT]
+
+
 def physical_column(defs_signal: str) -> str:
-    unit = vehicle_cl250.DIDS[defs_signal][_DID_UNIT]
-    return f"{signal_key(defs_signal)}_{unit_suffix(unit)}"
+    return f"{signal_key(defs_signal)}_{unit_suffix(physical_unit(defs_signal))}"
 
 
 def age_column(defs_signal: str) -> str:

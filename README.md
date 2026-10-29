@@ -10,7 +10,7 @@ organization; see `vehicle-defs/docs/ARCHITECTURE.md` for the platform picture.
 
 - No model training (`vehicle-ml` reads data from here).
 - Never sends commands to the vehicle; it only stores and serves data.
-- No MDF4 export yet (skeleton only, see `mdf4.py`).
+- MDF4 is an archive/sharing export; Parquet remains the source for ML.
 
 ## Setup
 
@@ -18,6 +18,10 @@ organization; see `vehicle-defs/docs/ARCHITECTURE.md` for the platform picture.
 git submodule update --init --recursive   # external/vehicle-defs, pinned to v0.19.0
 uv sync                                    # installs runtime + dev dependencies
 ```
+
+The `export` command (MDF4) needs the optional `mdf4` extra: `uv sync --extra mdf4`
+(the dev group already includes it). It pulls in asammdf, which is LGPL-3.0+, so the
+default install and the Docker image leave it out (D-091).
 
 ## Run
 
@@ -44,6 +48,8 @@ uv run vehicle-server report <session_id> --format json
 uv run vehicle-server list                        # one line per ingested session
 uv run vehicle-server derive <session_id>         # recompute the derived signals and ride summaries of a stored session
 uv run vehicle-server derive --all                # ... of every stored session
+uv run vehicle-server export <session_id>         # write <session>/parquet/<session_id>.mf4
+uv run vehicle-server export <session_id> --include-position  # include GPS position columns (off by default, D-076)
 uv run vehicle-server serve [--host] [--port] [--reload]
 ```
 
@@ -78,6 +84,7 @@ $VEHICLE_DATA_DIR/
     parquet/imu.parquet            # decoded IMU samples (if imu.csv was present)
     parquet/gps.parquet            # decoded GPS blocks (if gps.csv was present)
     parquet/signals.parquet        # vehicle-signal records (if signals.csv was present)
+    parquet/<session_id>.mf4       # archive/sharing export written on demand by `export`
     parquet/derived.parquet        # derived signals, long format (if any could be computed)
     parquet/derived_summary.parquet  # class-B ride summaries, long format (if any)
     report.json                    # validation report (see below), incl. the `derived` and `derived_summary` blocks
