@@ -47,7 +47,14 @@ logger = logging.getLogger(__name__)
 MDF_VERSION = "4.10"
 _VEHICLE_SIGNAL_GROUP = "vehicle signals"
 _METADATA_COLUMNS = frozenset(
-    {"session_id", "rx_utc", "rx_mono_ms", "decode_error", "fix_type_name"}
+    {
+        "session_id",
+        "rx_utc",
+        "rx_mono_ms",
+        "device_time_ms",
+        "decode_error",
+        "fix_type_name",
+    }
 )
 _POSITION_TOKENS = frozenset(
     {
@@ -142,12 +149,12 @@ def _gps_units(schema: dict[str, Any]) -> dict[str, str]:
         "speed_accuracy_mps": speed,
         "heading_of_motion_deg": heading,
         "heading_accuracy_deg": heading,
-        "ground_speed": "mm/s",
-        "speed_accuracy": "mm/s",
-        "heading_of_motion": "1e-5 deg",
-        "heading_accuracy": "1e-5 deg",
     }
     for column in (
+        "ground_speed",
+        "speed_accuracy",
+        "heading_of_motion",
+        "heading_accuracy",
         "fix_type",
         "num_sv",
         "flags",

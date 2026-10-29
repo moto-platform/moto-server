@@ -114,9 +114,14 @@ def test_export_round_trip(tmp_path: Path):
             "MYSTERY",
         }
         assert expected <= set(mdf.channels_db)
-        assert {"session_id", "rx_utc", "rx_mono_ms", "decode_error", "state_name"}.isdisjoint(
-            mdf.channels_db
-        )
+        assert {
+            "session_id",
+            "rx_utc",
+            "rx_mono_ms",
+            "device_time_ms",
+            "decode_error",
+            "state_name",
+        }.isdisjoint(mdf.channels_db)
 
         speed = mdf.get("engine_speed_rpm")
         np.testing.assert_allclose(speed.timestamps, [10.0, 10.2, 10.4])
@@ -222,6 +227,7 @@ def test_v2_telemetry_falls_back_to_receive_time(tmp_path: Path):
         speed = mdf.get("engine_speed_rpm")
         np.testing.assert_allclose(speed.timestamps, [1.0, 1.2])
         np.testing.assert_allclose(speed.samples, [3_000, 3_100])
+        assert "device_time_ms" not in mdf.channels_db
 
 
 def _run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, argv: list[str]) -> int:
