@@ -10,6 +10,7 @@ dependencies = [
     "uvicorn[standard]>=0.30",
     "python-multipart>=0.0.9",
     "pyarrow>=17.0",
+    "asammdf>=8.8.28",
 ]
 
 [project.scripts]
