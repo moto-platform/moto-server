@@ -146,6 +146,20 @@ def test_summary_counts_blocks_but_no_signals_csv(settings, fixtures_dir, tmp_pa
     )
 
 
+def test_gps_and_vehicle_signal_block_versions_are_both_checked(settings, fixtures_dir, tmp_path):
+    def edit(d: Path) -> None:
+        _edit_json(
+            d / "meta.json",
+            gps_block_version=defs_ble.GPS_BLOCK_VERSION + 1,
+            vehicle_signal_block_version=defs_ble.VSIG_BLOCK_VERSION + 1,
+        )
+
+    report = _ingest(settings, fixtures_dir, tmp_path, VSIG_FIXTURE, edit)
+    assert report["status"] == "fail"
+    assert any("meta gps_block_version" in reason for reason in report["reasons"])
+    assert any("meta vehicle_signal_block_version" in reason for reason in report["reasons"])
+
+
 @pytest.mark.parametrize(
     ("fixture", "key", "pinned"),
     [
