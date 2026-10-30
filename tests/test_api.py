@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import io
 import shutil
+import tomllib
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
+from vehicle_server import __version__
 from vehicle_server.api import create_app
 from vehicle_server.config import Settings
 
@@ -29,6 +31,15 @@ def test_health_requires_no_auth(client: TestClient):
     resp = client.get("/health")
     assert resp.status_code == 200
     assert resp.json() == {"status": "ok"}
+
+
+def test_openapi_version_matches_package_and_pyproject(client: TestClient):
+    resp = client.get("/openapi.json")
+    assert resp.status_code == 200
+    pyproject = tomllib.loads(
+        (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    assert resp.json()["info"]["version"] == __version__ == pyproject["project"]["version"]
 
 
 def test_protected_endpoint_without_token_is_401(client: TestClient):
