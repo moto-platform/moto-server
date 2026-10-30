@@ -20,7 +20,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request, UploadFile,
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, PlainTextResponse
 
-from vehicle_server import index, report, series, stream
+from vehicle_server import __version__, index, report, series, stream
 from vehicle_server.config import Settings, load_settings
 from vehicle_server.ingest import (
     SESSION_ID_RE,
@@ -60,7 +60,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         async with stream.running_source(hub):
             yield
 
-    app = FastAPI(title="vehicle-server", version="0.2.0", lifespan=lifespan)
+    app = FastAPI(title="vehicle-server", version=__version__, lifespan=lifespan)
     app.state.settings = settings
     app.state.live_hub = hub
 
