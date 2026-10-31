@@ -30,6 +30,7 @@ import pyarrow.parquet as pq
 from vehicle_server.defs import vehicle_catalog, vehicle_derived
 from vehicle_server.derived import derived_path
 from vehicle_server.derived.inputs import SessionInputs
+from vehicle_server.position import is_position_name
 
 DEFAULT_MAX_POINTS = 2000
 MIN_MAX_POINTS = 10
@@ -79,6 +80,85 @@ def window(
     start = 0 if lo is None else bisect.bisect_left(times, lo)
     stop = len(times) if hi is None else bisect.bisect_right(times, hi)
     return times[start:stop], values[start:stop]
+
+
+def _percentile(sorted_values: list[float], fraction: float) -> float:
+    """Linear-interpolation percentile (the numpy default method)."""
+    position = (len(sorted_values) - 1) * fraction
+    lower = math.floor(position)
+    upper = math.ceil(position)
+    if lower == upper:
+        return sorted_values[lower]
+    weight = position - lower
+    return sorted_values[lower] * (1.0 - weight) + sorted_values[upper] * weight
+
+
+def _stats(values: list[float]) -> dict[str, float]:
+    count = len(values)
+    mean = math.fsum(values) / count
+    ordered = sorted(values)
+    return {
+        "count": count,
+        "mean": mean,
+        "std": math.sqrt(math.fsum((value - mean) ** 2 for value in values) / count),
+        "min": ordered[0],
+        "max": ordered[-1],
+        "p05": _percentile(ordered, 0.05),
+        "p50": _percentile(ordered, 0.50),
+        "p95": _percentile(ordered, 0.95),
+    }
+
+
+def build_stats_response(
+    session_id: str,
+    all_series: dict[str, SeriesData],
+    names: list[str] | None,
+    start_ms: int | None,
+    end_ms: int | None,
+) -> dict:
+    """Exact statistics over the full-resolution points in the requested window.
+
+    ``start_ms``/``end_ms`` are relative to ``t0_device_ms`` (the same axis as
+    ``GET /sessions/{id}/series``). An empty window returns ``count == 0`` and null
+    statistics. The standard deviation is the population standard deviation; the
+    percentiles use linear interpolation.
+    """
+    t0 = t0_of(all_series)
+    lo = None if start_ms is None else t0 + start_ms
+    hi = None if end_ms is None else t0 + end_ms
+    series: list[dict] = []
+    for name in all_series if names is None else names:
+        data = all_series[name]
+        times, values = window(data.times, data.values, lo, hi)
+        if values:
+            entry: dict[str, object] = {"name": name, "kind": data.kind, "unit": data.unit}
+            entry.update(_stats(values))
+            entry["t_first_ms"] = times[0] - t0
+            entry["t_last_ms"] = times[-1] - t0
+        else:
+            entry = {
+                "name": name,
+                "kind": data.kind,
+                "unit": data.unit,
+                "count": 0,
+                "mean": None,
+                "std": None,
+                "min": None,
+                "max": None,
+                "p05": None,
+                "p50": None,
+                "p95": None,
+                "t_first_ms": None,
+                "t_last_ms": None,
+            }
+        series.append(entry)
+    return {
+        "session_id": session_id,
+        "t0_device_ms": t0,
+        "start_ms": start_ms,
+        "end_ms": end_ms,
+        "series": series,
+    }
 
 
 def _derived_series(session_dir: Path) -> list[SeriesData]:
@@ -133,7 +213,11 @@ def load_all(session_dir: Path) -> dict[str, SeriesData]:
                 SeriesData(f"sensor.{sensor_name}", "sensor", entry.get("unit"), s.times, s.values)
             )
     found.extend(_derived_series(session_dir))
-    return {d.name: d for d in found if d.times and all(math.isfinite(v) for v in d.values)}
+    return {
+        d.name: d
+        for d in found
+        if d.times and all(math.isfinite(v) for v in d.values) and not is_position_name(d.name)
+    }
 
 
 def t0_of(all_series: dict[str, SeriesData]) -> int:

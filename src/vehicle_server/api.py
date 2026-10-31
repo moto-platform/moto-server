@@ -147,6 +147,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 )
         return series.build_response(session_id, available, names, max_points, from_ms, to_ms)
 
+    @app.get("/sessions/{session_id}/stats", dependencies=[AuthDep])
+    def get_session_stats(
+        session_id: str,
+        settings: SettingsDep,
+        signals: str | None = None,
+        start_ms: int | None = None,
+        end_ms: int | None = None,
+    ) -> dict:
+        session_dir = settings.sessions_dir / session_id
+        if not SESSION_ID_RE.match(session_id) or not session_dir.is_dir():
+            raise HTTPException(status_code=404, detail=f"unknown session: {session_id}")
+
+        available = series.load_all(session_dir)
+        names: list[str] | None = None
+        if signals is not None:
+            names = list(dict.fromkeys(n.strip() for n in signals.split(",") if n.strip()))
+            bad = [n for n in names if n not in available]
+            if bad or not names:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"unknown or unavailable series: {', '.join(bad) or '(empty list)'}",
+                )
+        return series.build_stats_response(session_id, available, names, start_ms, end_ms)
+
     @app.websocket("/ws/live")
     async def ws_live(websocket: WebSocket) -> None:
         await stream.serve_client(websocket, hub, settings.api_token)
