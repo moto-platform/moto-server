@@ -23,14 +23,13 @@ export divides by 1000 and the time axis stays physically correct.
 
 Position: latitude, longitude, altitude/height and other position-looking
 columns are not written unless ``include_position=True`` (D-076, invariant 7).
-The filter is deliberately isolated in ``_is_position_column`` for review.
+The filter is ``position.is_position_name``, shared with the read API.
 """
 
 from __future__ import annotations
 
 import logging
 import math
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -42,6 +41,7 @@ from asammdf import MDF, Signal
 
 from vehicle_server import ble_schema, signals
 from vehicle_server.decode import CAN_HEALTH_FIELDS, csv_column_for_field
+from vehicle_server.position import is_position_name
 
 logger = logging.getLogger(__name__)
 
@@ -57,20 +57,6 @@ _METADATA_COLUMNS = frozenset(
         "fix_type_name",
     }
 )
-_POSITION_TOKENS = frozenset(
-    {
-        "lat",
-        "latitude",
-        "lon",
-        "lng",
-        "longitude",
-        "alt",
-        "altitude",
-        "height",
-        "hmsl",
-        "ecef",
-    }
-)
 
 
 @dataclass
@@ -78,15 +64,6 @@ class _GroupResult:
     channels: int = 0
     unsourced_units: set[str] = field(default_factory=set)
     excluded_positions: set[str] = field(default_factory=set)
-
-
-def _is_position_column(column: str) -> bool:
-    """Whether a column name looks like a GPS position (D-076). Kept isolated for review.
-
-    "pos"/"position" are not tokens: they name non-GPS signals such as ``throttle_pos_pct``.
-    """
-    tokens = set(re.split(r"[^a-z0-9]+", column.lower()))
-    return bool(tokens & _POSITION_TOKENS)
 
 
 def _is_numeric(data_type: pa.DataType) -> bool:
@@ -211,7 +188,7 @@ def _append_wide_group(
             continue
         if not _is_numeric(table.schema.field(name).type):
             continue
-        if not include_position and _is_position_column(name):
+        if not include_position and is_position_name(name):
             result.excluded_positions.add(name)
             continue
         channel_names.append(name)
@@ -250,7 +227,7 @@ def _append_vehicle_signals(mdf: MDF, table: pa.Table, *, include_position: bool
             continue
         if not math.isfinite(float(value)):
             continue
-        if _is_position_column(signal):
+        if is_position_name(signal):
             if not include_position:
                 result.excluded_positions.add(signal)
                 continue

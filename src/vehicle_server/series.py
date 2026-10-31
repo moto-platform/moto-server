@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import bisect
 import math
-import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -31,15 +30,11 @@ import pyarrow.parquet as pq
 from vehicle_server.defs import vehicle_catalog, vehicle_derived
 from vehicle_server.derived import derived_path
 from vehicle_server.derived.inputs import SessionInputs
+from vehicle_server.position import is_position_name
 
 DEFAULT_MAX_POINTS = 2000
 MIN_MAX_POINTS = 10
 MAX_MAX_POINTS = 20000
-
-_HORIZONTAL_POSITION_TOKENS = frozenset({"lat", "lon", "lng", "latitude", "longitude"})
-_VERTICAL_POSITION_TOKENS = frozenset({"height", "alt", "altitude"})
-_CAMEL_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
-_TOKEN_SPLIT = re.compile(r"[^a-z0-9]+")
 
 
 @dataclass(frozen=True)
@@ -87,19 +82,6 @@ def window(
     return times[start:stop], values[start:stop]
 
 
-def is_position_name(name: str) -> bool:
-    """Whether a series name looks like a GPS position (D-076, invariant 7).
-
-    A horizontal component is refused anywhere in the name; a vertical one only as the
-    last token, so a relative quantity such as ``derived.altitude_change`` stays.
-    """
-    normalized = _CAMEL_BOUNDARY.sub("_", name).lower()
-    tokens = [token for token in _TOKEN_SPLIT.split(normalized) if token]
-    if any(token in _HORIZONTAL_POSITION_TOKENS for token in tokens):
-        return True
-    return bool(tokens) and tokens[-1] in _VERTICAL_POSITION_TOKENS
-
-
 def _percentile(sorted_values: list[float], fraction: float) -> float:
     """Linear-interpolation percentile (the numpy default method)."""
     position = (len(sorted_values) - 1) * fraction
@@ -144,11 +126,8 @@ def build_stats_response(
     t0 = t0_of(all_series)
     lo = None if start_ms is None else t0 + start_ms
     hi = None if end_ms is None else t0 + end_ms
-    selected = [
-        name for name in (all_series if names is None else names) if not is_position_name(name)
-    ]
     series: list[dict] = []
-    for name in selected:
+    for name in all_series if names is None else names:
         data = all_series[name]
         times, values = window(data.times, data.values, lo, hi)
         if values:

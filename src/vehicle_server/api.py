@@ -163,7 +163,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         names: list[str] | None = None
         if signals is not None:
             names = list(dict.fromkeys(n.strip() for n in signals.split(",") if n.strip()))
-            bad = [n for n in names if n not in available or series.is_position_name(n)]
+            bad = [n for n in names if n not in available]
             if bad or not names:
                 raise HTTPException(
                     status_code=404,

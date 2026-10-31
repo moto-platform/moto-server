@@ -10,6 +10,7 @@ import pytest
 from asammdf import MDF
 
 from vehicle_server import cli, mdf4
+from vehicle_server.position import is_position_name
 
 
 def _write_session(tmp_path: Path) -> Path:
@@ -194,7 +195,7 @@ def test_no_defs_column_is_mistaken_for_position():
         **mdf4._gps_units(schema),
     }
     assert "throttle_pos_pct" in columns
-    assert [name for name in columns if mdf4._is_position_column(name)] == []
+    assert [name for name in columns if is_position_name(name)] == []
 
 
 def test_missing_imu_is_skipped(tmp_path: Path):
